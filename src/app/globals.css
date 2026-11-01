@@ -1,26 +1,290 @@
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import 'tailwindcss';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-dark: #0a0a0a;
+  --color-light: #f4f3ef;
+  --color-muted: #8a8a85;
+  --color-accent: #d93025;
+
+  --font-display: 'Anton', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'Space Mono', monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* ── Base ────────────────────────────────────────────── */
+
+* {
+  cursor: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@media (pointer: coarse) {
+  * {
+    cursor: auto;
   }
 }
 
+html {
+  scroll-behavior: auto;
+  background-color: #0a0a0a;
+  color: #f4f3ef;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body);
+  background-color: #0a0a0a;
+  color: #f4f3ef;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+::selection {
+  background-color: #d93025;
+  color: #f4f3ef;
+}
+
+/* ── Film-grain overlay (Flat noise pattern) ─────────────────────────────── */
+
+.film-grain::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  opacity: 0.04;
+  background-image: url('/noise.png');
+  background-repeat: repeat;
+  background-size: 128px 128px;
+}
+
+/* ── Typography helpers ──────────────────────────────── */
+
+.heading-display {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  line-height: 0.95;
+}
+
+.text-mono {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ── Section layout (Solid backgrounds, higher z-index than hero canvas) ── */
+
+.section-dark {
+  position: relative;
+  z-index: 20;
+  background-color: #0a0a0a;
+  color: #f4f3ef;
+}
+
+.section-light {
+  position: relative;
+  z-index: 20;
+  background-color: #f4f3ef;
+  color: #0a0a0a;
+}
+
+.section-border-dark {
+  border-top: 1px solid #8a8a85;
+}
+
+.section-border-light {
+  border-top: 1px solid #8a8a85;
+}
+
+/* ── Loader (Solid colors only) ──────────────────────────── */
+
+.loader-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: #0a0a0a;
+  color: #f4f3ef;
+  transition: opacity 0.5s ease;
+}
+
+.loader-screen.loaded {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── Scroll progress bar (Solid thin bar) ────────────────── */
+
+.scroll-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background-color: #d93025;
+  z-index: 9999;
+  transform-origin: left;
+}
+
+/* ── Canvas pinned wrapper ───────────────────────────── */
+
+.hero-pinned-wrapper {
+  position: relative;
+  width: 100%;
+  height: 700vh;
+  background-color: #0a0a0a;
+}
+
+.hero-canvas-container {
+  position: sticky;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #0a0a0a;
+  z-index: 10;
+}
+
+.hero-canvas-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Magnetic buttons (Solid flat borders & backgrounds) ──── */
+
+.magnetic-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.75rem;
+  border: 1px solid #f4f3ef;
+  color: #f4f3ef;
+  background-color: #0a0a0a;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.magnetic-btn:hover {
+  background-color: #f4f3ef;
+  color: #0a0a0a;
+}
+
+.magnetic-btn-dark {
+  border: 1px solid #0a0a0a;
+  color: #0a0a0a;
+  background-color: #f4f3ef;
+}
+
+.magnetic-btn-dark:hover {
+  background-color: #0a0a0a;
+  color: #f4f3ef;
+}
+
+.magnetic-btn-accent {
+  border: 1px solid #d93025;
+  color: #f4f3ef;
+  background-color: #d93025;
+}
+
+.magnetic-btn-accent:hover {
+  background-color: #0a0a0a;
+  color: #d93025;
+  border-color: #d93025;
+}
+
+/* ── Marquee ─────────────────────────────────────────── */
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.marquee-track {
+  display: flex;
+  animation: marquee 25s linear infinite;
+  width: max-content;
+}
+
+.marquee-track:hover {
+  animation-play-state: paused;
+}
+
+.marquee-track-light {
+  display: flex;
+  animation: marquee 30s linear infinite;
+  width: max-content;
+}
+
+.marquee-track-light:hover {
+  animation-play-state: paused;
+}
+
+/* ── Timeline line drawing ───────────────────────────── */
+
+.timeline-line {
+  position: absolute;
+  left: 1rem;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: #8a8a85;
+  transform-origin: top;
+}
+
+@media (min-width: 768px) {
+  .timeline-line {
+    left: 50%;
+    transform: translateX(-50%);
+  }
+}
+
+/* ── Project card ────────────────────────────────────── */
+
+.project-card {
+  transform-style: preserve-3d;
+  perspective: 1000px;
+  background-color: #0a0a0a;
+}
+
+/* ── Custom cursor (Solid red ring on every background, NO mix-blend-mode) ── */
+
+.custom-cursor {
+  position: fixed;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #d93025;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 99999;
+  transform: translate(-50%, -50%);
+  transition: width 0.25s ease, height 0.25s ease;
+  background-color: transparent;
+}
+
+.custom-cursor.hovered {
+  width: 44px;
+  height: 44px;
+  border-width: 2px;
+}
+
+@media (pointer: coarse) {
+  .custom-cursor {
+    display: none;
+  }
 }

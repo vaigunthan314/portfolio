@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vaigunthan SL — Award-Level 3D Scroll Portfolio
 
-## Getting Started
+A high-performance, award-level scroll portfolio featuring a frame-scrubbed hero sequence, smooth Lenis inertia scrolling, GSAP ScrollTrigger timeline reveals, an interactive React Three Fiber wireframe, and a strict flat-color aesthetic with custom micro-interactions.
 
-First, run the development server:
+---
 
+## 🛠 Tech Stack
+
+- **Framework**: Next.js 16 (App Router, Turbopack, TypeScript)
+- **Styling**: Tailwind CSS v4, Custom Design System
+- **Animation & Scroll**: GSAP 3 + ScrollTrigger, Lenis Smooth Scroll
+- **3D**: Three.js, React Three Fiber (`@react-three/fiber`), Drei (`@react-three/drei`)
+- **Image Processing**: Sharp (Node.js script for WebP conversion)
+- **Palette**: Flat solid colors only (#0a0a0a, #f4f3ef, #8a8a85, #d93025)
+
+---
+
+## 🚀 Getting Started
+
+### 1. Install Dependencies
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Convert Frames (if regenerating)
+The original 236 JPEG frames have already been processed into optimized WebP images (`/public/frames/frame-0001.webp` ... `frame-0236.webp`):
+```bash
+npm run frames
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Run the Development Server
+```bash
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 4. Build for Production & Linting
+```bash
+npm run lint
+npm run build
+```
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## 🌐 Deploy to Vercel
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Push this repository to GitHub / GitLab / Bitbucket.
+2. In the Vercel Dashboard, click **"Add New Project"** and import the repository.
+3. Configure the build settings (defaults will work out of the box):
+   - **Framework Preset**: Next.js
+   - **Build Command**: `next build`
+   - **Output Directory**: `.next`
+4. Click **Deploy**.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+> Note: `./assests/frames-src/` is in `.gitignore` so your Git repository and Vercel build payload remain small and under size limits. Only the converted WebP frames in `public/frames` are tracked and deployed.
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 📝 TODO: Items You Need to Replace / Customize
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+All site content is centralized in [`src/data/content.ts`](file:///Users/vaigunthansl/Desktop/portfolio/src/data/content.ts):
+
+1. **Project Links**:
+   - `PocketBot`:
+     - `liveUrl`: Replace `#` with your deployed WhatsApp link or Railway URL.
+     - `codeUrl`: Replace `#` with your GitHub repository link.
+   - `PathForge`:
+     - `liveUrl`: Replace `#` with your deployed Render URL.
+     - `codeUrl`: Replace `#` with your GitHub repository link.
+2. **Resume PDF**:
+   - The file was automatically copied from `./assests/Vaigunthan_SL_Resume.pdf` to [`public/Vaigunthan_SL_Resume.pdf`](file:///Users/vaigunthansl/Desktop/portfolio/public/Vaigunthan_SL_Resume.pdf).
+   - If you ever update your resume, simply place the new PDF at `public/Vaigunthan_SL_Resume.pdf`.
+3. **Domain / URL Configuration**:
+   - In `src/data/content.ts`, update `siteConfig.url` once your custom domain or Vercel URL is live.

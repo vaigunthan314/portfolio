@@ -39,3 +39,23 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
+# source frames (large JPGs - only keep converted WebP in public/frames)
+/assests/frames-src/
+
+# test artifacts & screenshots
+/tests/screenshots/
+/screenshots/
+/screenshots-v2/
+screenshots*/
+/tmp/
+/.venv/
+
+node_modules
+.next
+.venv
+.env*
+.DS_Store
+screenshots*/
+assests/
