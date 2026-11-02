@@ -463,12 +463,6 @@ export default function Hero() {
     []
   );
 
-      // 2. Decode missing frames within window nearest to centerIdx
-      pumpDecodeQueueRef.current();
-    },
-    []
-  );
-
   useIsomorphicLayoutEffect(() => {
     sizeCanvas();
   }, [sizeCanvas]);
