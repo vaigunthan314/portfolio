@@ -1,6 +1,8 @@
 export const TOTAL_FRAMES = 189;
 export const FRAME_PATH = (n: number) =>
   `/frames/frame_${String(n).padStart(3, '0')}.png`;
+export const FRAME_MOBILE_PATH = (n: number) =>
+  `/frames-mobile/frame_${String(n).padStart(3, '0')}.jpg`;
 
 export const siteConfig = {
   name: 'Vaigunthan SL',

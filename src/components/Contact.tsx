@@ -122,12 +122,9 @@ export default function Contact() {
         </div>
 
         {/* Footer */}
-        <div className="pt-6 border-t border-[#333] flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="text-mono text-[#8a8a85] text-[10px]">
-            &copy; 2026 VAIGUNTHAN SL • CSBS STUDENT &amp; AWS CERTIFIED CLOUD PRACTITIONER
-          </p>
-          <p className="text-mono text-[#8a8a85] text-[10px]">
-            NEXT.JS • TAILWIND CSS • GSAP • THREE.JS
+        <div className="pt-6 border-t border-[#333] flex items-center justify-start">
+          <p className="text-mono text-[#8a8a85] text-[10px] text-left">
+            &copy; 2026 VAIGUNTHAN SL
           </p>
         </div>
       </div>

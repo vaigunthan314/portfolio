@@ -8,6 +8,8 @@ interface SoundContextType {
   hasEnded: boolean;
   showTapHint: boolean;
   needsUserGesture: boolean;
+  isAudible: () => boolean;
+  playFromUserGesture: () => void;
   toggleSound: () => void;
   startAudio: () => void;
 }
@@ -18,6 +20,8 @@ const SoundContext = createContext<SoundContextType>({
   hasEnded: false,
   showTapHint: false,
   needsUserGesture: false,
+  isAudible: () => false,
+  playFromUserGesture: () => {},
   toggleSound: () => {},
   startAudio: () => {},
 });
@@ -76,6 +80,12 @@ export function SoundProvider({ children }: { children: React.ReactNode }) {
   const [showTapHint, setShowTapHint] = useState<boolean>(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const isAudible = useCallback((): boolean => {
+    const audio = getAudio();
+    if (!audio) return false;
+    return !audio.paused && !audio.muted && audio.volume > 0 && audio.currentTime > 0;
+  }, []);
 
   const removeUnlockListeners = useCallback(() => {
     if (cleanupUnlockListeners) {
@@ -166,6 +176,29 @@ export function SoundProvider({ children }: { children: React.ReactNode }) {
         });
     }
   }, [attachUnlockListeners, removeUnlockListeners]);
+
+  const playFromUserGesture = useCallback(() => {
+    if (hasEnded) return;
+    const audio = getAudio();
+    if (!audio) return;
+
+    userMuted = false;
+    audio.removeAttribute('muted');
+    audio.defaultMuted = false;
+    audio.muted = false;
+    setSoundOn(true);
+    setShowTapHint(false);
+    removeUnlockListeners();
+
+    const p = audio.play();
+    if (p !== undefined) {
+      p.then(() => {
+        fadeInVolume(0.8, 1000);
+      }).catch(() => {});
+    } else {
+      fadeInVolume(0.8, 1000);
+    }
+  }, [removeUnlockListeners]);
 
   const toggleSound = useCallback(() => {
     if (hasEnded) return;
@@ -260,6 +293,8 @@ export function SoundProvider({ children }: { children: React.ReactNode }) {
         hasEnded: hasEndedState,
         showTapHint,
         needsUserGesture: showTapHint,
+        isAudible,
+        playFromUserGesture,
         toggleSound,
         startAudio,
       }}

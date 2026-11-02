@@ -3,16 +3,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { TOTAL_FRAMES, FRAME_PATH } from '@/data/content';
+import { TOTAL_FRAMES, FRAME_PATH, FRAME_MOBILE_PATH } from '@/data/content';
 import { useReducedMotion } from '@/hooks/useMediaQuery';
 import { useSound } from '@/context/SoundContext';
 
 gsap.registerPlugin(ScrollTrigger);
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
-
-const NATIVE_WIDTH = 1920;
-const NATIVE_HEIGHT = 1080;
 
 interface FrameEdgeColors {
   top: [number, number, number];
@@ -39,10 +36,20 @@ export default function Hero() {
   const beat2Ref = useRef<HTMLDivElement>(null);
   const beat3Ref = useRef<HTMLDivElement>(null);
 
-  // Memory-safe ImageBitmap sliding window cache for original JPG frames ONLY
+  // Mobile vs Desktop resolution tracking
+  const isMobileRef = useRef<boolean>(false);
+  const nativeWidthRef = useRef<number>(1920);
+  const nativeHeightRef = useRef<number>(1080);
+
+  // Memory-safe ImageBitmap sliding window cache (+/-20 frames)
   const blobCacheRef = useRef<(Blob | null)[]>(new Array(TOTAL_FRAMES).fill(null));
   const bitmapCacheRef = useRef<Map<number, ImageBitmap>>(new Map());
   const decodingSetRef = useRef<Set<number>>(new Set());
+
+  // Priority queue for background fetches (at most 4 concurrent, nearest to scroll position)
+  const activeFetchesRef = useRef<number>(0);
+  const fetchingSetRef = useRef<Set<number>>(new Set());
+  const currentTargetFrameRef = useRef<number>(0);
 
   // Frame metadata (edge colors for letterbox fill)
   const framesMetaRef = useRef<FrameEdgeColors[] | null>(null);
@@ -65,24 +72,46 @@ export default function Hero() {
   // Intro loader states & audio
   const loaderRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const [showEnterButton, setShowEnterButton] = useState<boolean>(false);
   const [isLoaderDismissed, setIsLoaderDismissed] = useState<boolean>(false);
 
   const reducedMotion = useReducedMotion();
-  const { soundOn, hasEnded, showTapHint, toggleSound, startAudio } = useSound();
+  const {
+    soundOn,
+    hasEnded,
+    showTapHint,
+    toggleSound,
+    startAudio,
+    isAudible,
+    playFromUserGesture,
+  } = useSound();
 
-  // Size canvas backing store strictly at native 1920x1080
+  // Helper to resolve mobile vs desktop frame asset path
+  const getFramePath = useCallback((idx: number) => {
+    return isMobileRef.current ? FRAME_MOBILE_PATH(idx + 1) : FRAME_PATH(idx + 1);
+  }, []);
+
+  // Size canvas backing store strictly at native frame resolution
   const sizeCanvas = useCallback(() => {
     const container = containerRef.current;
     const vw = container?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 1920);
     const vh = container?.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 1080);
     const aspect = vw / vh;
 
+    // Detect screen width under 768px for mobile frames
+    const isMobile = vw < 768;
+    isMobileRef.current = isMobile;
+    nativeWidthRef.current = isMobile ? 1080 : 1920;
+    nativeHeightRef.current = isMobile ? 608 : 1080;
+    const nativeW = nativeWidthRef.current;
+    const nativeH = nativeHeightRef.current;
+
     // Backing store is native frame resolution (never smaller, never larger)
     const canvas = canvasRef.current;
     if (canvas) {
-      if (canvas.width !== NATIVE_WIDTH || canvas.height !== NATIVE_HEIGHT) {
-        canvas.width = NATIVE_WIDTH;
-        canvas.height = NATIVE_HEIGHT;
+      if (canvas.width !== nativeW || canvas.height !== nativeH) {
+        canvas.width = nativeW;
+        canvas.height = nativeH;
       }
     }
 
@@ -93,17 +122,17 @@ export default function Hero() {
     let cssY: number;
 
     if (aspect >= 1) {
-      // Landscape: Contain-fit native 1920x1080 frame, centered, no cropping
-      const scale = Math.min(vw / NATIVE_WIDTH, vh / NATIVE_HEIGHT);
-      cssW = NATIVE_WIDTH * scale;
-      cssH = NATIVE_HEIGHT * scale;
+      // Landscape: Contain-fit native frame, centered, no cropping
+      const scale = Math.min(vw / nativeW, vh / nativeH);
+      cssW = nativeW * scale;
+      cssH = nativeH * scale;
       cssX = (vw - cssW) / 2;
       cssY = (vh - cssH) / 2;
     } else {
       // Portrait / narrow: Cover-fit centered on subject
-      const scale = Math.max(vw / NATIVE_WIDTH, vh / NATIVE_HEIGHT);
-      cssW = NATIVE_WIDTH * scale;
-      cssH = NATIVE_HEIGHT * scale;
+      const scale = Math.max(vw / nativeW, vh / nativeH);
+      cssW = nativeW * scale;
+      cssH = nativeH * scale;
       cssX = (vw - cssW) / 2;
       cssY = (vh - cssH) / 2;
     }
@@ -126,11 +155,12 @@ export default function Hero() {
     if (rightBarRef.current) rightBarRef.current.style.width = `${Math.ceil(cssX)}px`;
   }, []);
 
-  // Fetch frame blob directly from public/frames/frame-XXXX.jpg
-  const fetchFrameBlob = useCallback(async (idx: number): Promise<Blob | null> => {
+  // Fetch frame blob progressively (supports priority high for initial frames)
+  const fetchFrameBlob = useCallback(async (idx: number, isHighPriority = false): Promise<Blob | null> => {
     if (blobCacheRef.current[idx]) return blobCacheRef.current[idx];
     try {
-      const res = await fetch(FRAME_PATH(idx + 1));
+      const init: RequestInit = isHighPriority ? { priority: 'high' } : {};
+      const res = await fetch(getFramePath(idx), init);
       if (!res.ok) return null;
       const b = await res.blob();
       blobCacheRef.current[idx] = b;
@@ -138,9 +168,9 @@ export default function Hero() {
     } catch {
       return null;
     }
-  }, []);
+  }, [getFramePath]);
 
-  // Draw frame on canvas (1:1 native 1920x1080 pixels, imageSmoothingEnabled = true, imageSmoothingQuality = 'high')
+  // Draw frame on canvas (draws only when frame index changes)
   const drawFrame = useCallback((frameIdx: number, force = false) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -169,8 +199,8 @@ export default function Hero() {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // Draw 100% pure original frame pixels at native 1920x1080 resolution
-    ctx.drawImage(bmp, 0, 0, NATIVE_WIDTH, NATIVE_HEIGHT);
+    // Draw frame pixels at native resolution
+    ctx.drawImage(bmp, 0, 0, nativeWidthRef.current, nativeHeightRef.current);
 
     // Update letterbox bars with sampled edge colors
     const meta = framesMetaRef.current ? framesMetaRef.current[clampedIdx] : null;
@@ -193,17 +223,80 @@ export default function Hero() {
     }
   }, []);
 
-  // Sliding window ImageBitmap cache manager
+  // Queue of at most 4 background connections nearest to current target scroll position
+  const pumpFetchQueueRef = useRef<() => void>(() => {});
+
+  const pumpFetchQueue = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const maxConcurrent = 4;
+
+    while (activeFetchesRef.current < maxConcurrent) {
+      let bestIdx = -1;
+      let minDistance = Infinity;
+      const target = currentTargetFrameRef.current;
+
+      for (let i = 0; i < TOTAL_FRAMES; i++) {
+        if (!blobCacheRef.current[i] && !fetchingSetRef.current.has(i)) {
+          const dist = Math.abs(i - target);
+          if (dist < minDistance) {
+            minDistance = dist;
+            bestIdx = i;
+          }
+        }
+      }
+
+      if (bestIdx === -1) break;
+
+      const idxToFetch = bestIdx;
+      fetchingSetRef.current.add(idxToFetch);
+      activeFetchesRef.current++;
+
+      fetchFrameBlob(idxToFetch).finally(() => {
+        fetchingSetRef.current.delete(idxToFetch);
+        activeFetchesRef.current--;
+
+        const currentTarget = currentTargetFrameRef.current;
+        if (
+          Math.abs(idxToFetch - currentTarget) <= 20 &&
+          blobCacheRef.current[idxToFetch] &&
+          !bitmapCacheRef.current.has(idxToFetch)
+        ) {
+          createImageBitmap(blobCacheRef.current[idxToFetch]!)
+            .then((bmp) => {
+              if (Math.abs(idxToFetch - currentTargetFrameRef.current) <= 20) {
+                bitmapCacheRef.current.set(idxToFetch, bmp);
+                if (lastDrawnFrameRef.current === idxToFetch) {
+                  drawFrame(idxToFetch, true);
+                }
+              } else {
+                bmp.close();
+              }
+            })
+            .catch(() => {});
+        }
+        pumpFetchQueueRef.current();
+      });
+    }
+  }, [fetchFrameBlob, drawFrame]);
+
+  useEffect(() => {
+    pumpFetchQueueRef.current = pumpFetchQueue;
+  }, [pumpFetchQueue]);
+
+  // Sliding window ImageBitmap cache manager (+/-20 frames)
   const updateBitmapWindow = useCallback(
     (centerIdx: number) => {
       if (typeof window === 'undefined' || typeof createImageBitmap === 'undefined') return;
+      currentTargetFrameRef.current = centerIdx;
+      pumpFetchQueue();
+
       if (Math.abs(centerIdx - lastCenterIdxRef.current) < 2) return;
       lastCenterIdxRef.current = centerIdx;
 
       const minIdx = Math.max(0, centerIdx - 20);
-      const maxIdx = Math.min(TOTAL_FRAMES - 1, centerIdx + 25);
+      const maxIdx = Math.min(TOTAL_FRAMES - 1, centerIdx + 20);
 
-      // 1. Evict bitmaps outside window
+      // 1. Evict bitmaps outside sliding window (+/-20 frames)
       for (const [key, bmp] of bitmapCacheRef.current.entries()) {
         if (key < minIdx || key > maxIdx) {
           bmp.close();
@@ -211,7 +304,7 @@ export default function Hero() {
         }
       }
 
-      // 2. Decode missing frames nearest to centerIdx
+      // 2. Decode missing frames within window nearest to centerIdx
       const missingIndices: number[] = [];
       for (let i = minIdx; i <= maxIdx; i++) {
         if (!bitmapCacheRef.current.has(i) && !decodingSetRef.current.has(i) && blobCacheRef.current[i]) {
@@ -220,7 +313,7 @@ export default function Hero() {
       }
       missingIndices.sort((a, b) => Math.abs(a - centerIdx) - Math.abs(b - centerIdx));
 
-      for (let j = 0; j < Math.min(missingIndices.length, 8); j++) {
+      for (let j = 0; j < Math.min(missingIndices.length, 6); j++) {
         const i = missingIndices[j];
         decodingSetRef.current.add(i);
         createImageBitmap(blobCacheRef.current[i]!)
@@ -240,7 +333,7 @@ export default function Hero() {
           });
       }
     },
-    [drawFrame]
+    [drawFrame, pumpFetchQueue]
   );
 
   useIsomorphicLayoutEffect(() => {
@@ -288,7 +381,19 @@ export default function Hero() {
     }
   }, []);
 
-  // Load frames-meta.json and start loader + audio flow
+  const handleEnter = useCallback(() => {
+    playFromUserGesture();
+    dismissLoader();
+  }, [playFromUserGesture, dismissLoader]);
+
+  // If audio is already audible or becomes audible while ENTER is shown, slide away automatically
+  useEffect(() => {
+    if (showEnterButton && isAudible() && !isLoaderDismissed) {
+      dismissLoader();
+    }
+  }, [showEnterButton, isAudible, isLoaderDismissed, dismissLoader]);
+
+  // Load frames-meta.json and start progressive loader + audio flow
   useEffect(() => {
     let isCancelled = false;
 
@@ -316,39 +421,61 @@ export default function Hero() {
       ease: 'power3.out',
     });
 
-    // Progress bar fills over 2.5s
+    // Reset progress bar
     if (progressBarRef.current) {
-      gsap.fromTo(
-        progressBarRef.current,
-        { scaleX: 0 },
-        { scaleX: 1, duration: 2.5, ease: 'power2.inOut', transformOrigin: 'left' }
-      );
+      gsap.set(progressBarRef.current, { scaleX: 0 });
+    }
+
+    // Preload first 3 frames via link rel="preload"
+    if (typeof document !== 'undefined') {
+      for (let i = 0; i < 3; i++) {
+        const link = document.createElement('link');
+        link.rel = 'preload';
+        link.as = 'image';
+        link.href = getFramePath(i);
+        document.head.appendChild(link);
+      }
     }
 
     const startTime = Date.now();
     let loadedInitial20 = false;
     let finishTriggered = false;
 
-    // Loader lasts 2 to 3 seconds. Dismisses automatically and audio keeps playing.
+    // Loader lasts 2 to 3 seconds. Dismisses automatically if audio audible, else shows ENTER.
     const checkReady = () => {
       if (isCancelled || isLoaderDismissed || finishTriggered) return;
       const elapsed = Date.now() - startTime;
-      const minDelay = 2500;
+      const minDelay = 2000;
       const maxDelay = 3000;
 
       if ((elapsed >= minDelay && loadedInitial20) || elapsed >= maxDelay) {
         finishTriggered = true;
-        dismissLoader();
+        if (isAudible()) {
+          dismissLoader();
+        } else {
+          setShowEnterButton(true);
+        }
       } else {
         setTimeout(checkReady, 50);
       }
     };
 
-    // Preload initial 20 frames
+    // Preload initial 20 frames at high priority; progress bar reflects first 20 frames
+    let initialLoadedCount = 0;
     const initialLoads: Promise<void>[] = [];
     for (let i = 0; i < 20; i++) {
       initialLoads.push(
-        fetchFrameBlob(i).then(async (blob) => {
+        fetchFrameBlob(i, true).then(async (blob) => {
+          initialLoadedCount++;
+          const pct = Math.min(1, initialLoadedCount / 20);
+          if (progressBarRef.current) {
+            gsap.to(progressBarRef.current, {
+              scaleX: pct,
+              duration: 0.15,
+              ease: 'power1.out',
+              transformOrigin: 'left',
+            });
+          }
           if (blob && typeof createImageBitmap !== 'undefined') {
             const bmp = await createImageBitmap(blob);
             if (!isCancelled) {
@@ -367,25 +494,8 @@ export default function Hero() {
     Promise.all(initialLoads).finally(() => {
       loadedInitial20 = true;
       checkReady();
-
-      // Low-concurrency background warm-up queue (max 6 connections)
-      let nextIdx = 20;
-      const concurrency = 6;
-      let activeConnections = 0;
-
-      const pumpQueue = () => {
-        if (isCancelled) return;
-        while (activeConnections < concurrency && nextIdx < TOTAL_FRAMES) {
-          const idx = nextIdx++;
-          activeConnections++;
-          fetchFrameBlob(idx).finally(() => {
-            activeConnections--;
-            pumpQueue();
-          });
-        }
-      };
-
-      pumpQueue();
+      // Pump queue for remaining frames (at most 4 at a time)
+      pumpFetchQueue();
     });
 
     checkReady();
@@ -393,7 +503,16 @@ export default function Hero() {
     return () => {
       isCancelled = true;
     };
-  }, [fetchFrameBlob, drawFrame, startAudio, isLoaderDismissed, dismissLoader]);
+  }, [
+    fetchFrameBlob,
+    drawFrame,
+    startAudio,
+    isLoaderDismissed,
+    dismissLoader,
+    getFramePath,
+    pumpFetchQueue,
+    isAudible,
+  ]);
 
   const mapProgressToFrame = (p: number): number => {
     if (p <= 0.15) {
@@ -512,18 +631,30 @@ export default function Hero() {
             VAIGUNTHAN SL
           </span>
 
-          {/* Thin red progress bar (fills over 2.5s) */}
+          {/* Thin red progress bar */}
           <div className="w-48 sm:w-64 h-[2px] bg-[#1f1f1f] overflow-hidden">
             <div
               ref={progressBarRef}
               className="h-full bg-[#d93025] w-full transform origin-left"
             />
           </div>
+
+          {/* Solid outlined button "ENTER" centred under the progress bar */}
+          {showEnterButton && (
+            <button
+              id="loader-enter-btn"
+              onClick={handleEnter}
+              type="button"
+              className="mt-8 px-8 py-2.5 text-mono text-[14px] font-medium tracking-widest text-[#d93025] border border-[#d93025] bg-[#0a0a0a] hover:bg-[#d93025] hover:text-[#f4f3ef] transition-colors cursor-pointer"
+            >
+              ENTER
+            </button>
+          )}
         </div>
 
         {/* Fixed bottom-right sound button (24px margin, mono 12px, outlined, solid colours) */}
         <div className="absolute bottom-6 right-6 z-20 flex items-center gap-3">
-          {showTapHint && (
+          {!showEnterButton && showTapHint && (
             <span className="text-mono text-[11px] sm:text-[12px] text-[#d93025] tracking-wider animate-pulse">
               TAP ANYWHERE FOR SOUND
             </span>
