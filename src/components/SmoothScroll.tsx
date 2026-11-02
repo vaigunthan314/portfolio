@@ -22,6 +22,16 @@ export function scrollLenisToTop(): void {
   globalLenis?.scrollTo(0, { immediate: true });
 }
 
+export function scrollLenisTo(target: number | HTMLElement): void {
+  if (globalLenis) {
+    globalLenis.scrollTo(target, { immediate: true });
+  } else if (typeof target === 'number') {
+    window.scrollTo(0, target);
+  } else {
+    target.scrollIntoView();
+  }
+}
+
 export default function SmoothScroll({ children }: { children?: React.ReactNode }) {
   const lenisRef = useRef<Lenis | null>(null);
 

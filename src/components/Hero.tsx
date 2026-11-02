@@ -6,13 +6,15 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { TOTAL_FRAMES, FRAME_PATH, FRAME_MOBILE_PATH } from '@/data/content';
 import { useReducedMotion } from '@/hooks/useMediaQuery';
 import { useSound } from '@/context/SoundContext';
-import { stopLenis, startLenis, scrollLenisToTop } from './SmoothScroll';
+import { stopLenis, startLenis, scrollLenisToTop, scrollLenisTo } from './SmoothScroll';
 
 gsap.registerPlugin(ScrollTrigger);
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 const BLOCKED_KEYS = new Set([' ', 'Space', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End']);
+/** Home-page scroll position, kept for Back from /malaysia. */
+const SCROLL_KEY = 'portfolio:scroll-y';
 
 let isScrollLocked = false;
 let releaseScrollLock: (() => void) | null = null;
@@ -125,6 +127,7 @@ export default function Hero() {
   // Intro loader states & audio
   const loaderRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const vslNameRef = useRef<HTMLSpanElement>(null);
   // The inline head script adds `loading` before first paint on a full load of
   // `/`. If it is missing, this is a client-side remount (back from /malaysia),
   // so the loader must stay dismissed.
@@ -458,20 +461,34 @@ export default function Hero() {
     // Audio is the first thing called when the loader mounts (never blocks it)
     if (runLoader) startAudio();
 
-    // VSL initials animation
+    // One timeline drives the VSL letters, the name line and the progress
+    // line, so the bar can never finish before the letters do.
     const letters = ['.vsl-char-0', '.vsl-char-1', '.vsl-char-2'];
-    gsap.set(letters, { opacity: 0, y: 15 });
-    gsap.to(letters, {
-      opacity: 1,
-      y: 0,
-      stagger: 0.35,
-      duration: 0.6,
-      ease: 'power3.out',
-    });
-
-    // Reset progress bar
-    if (progressBarRef.current) {
-      gsap.set(progressBarRef.current, { scaleX: 0 });
+    if (runLoader) {
+      const loaderTl = gsap.timeline();
+      loaderTl.fromTo(
+        letters,
+        { opacity: 0, y: 15 },
+        { opacity: 1, y: 0, duration: 0.55, stagger: 0.45, ease: 'power3.out' },
+        0
+      );
+      if (vslNameRef.current) {
+        loaderTl.fromTo(
+          vslNameRef.current,
+          { opacity: 0 },
+          { opacity: 1, duration: 0.5, ease: 'power2.out' },
+          1.6
+        );
+      }
+      if (progressBarRef.current) {
+        // Linear fill over 2.2s, holding at 95% until the frames are ready.
+        loaderTl.fromTo(
+          progressBarRef.current,
+          { scaleX: 0 },
+          { scaleX: 0.95, duration: 2.2, ease: 'none' },
+          0
+        );
+      }
     }
 
     // Preload first 3 frames via link rel="preload"
@@ -498,35 +515,41 @@ export default function Hero() {
     // Failsafe: never leave a visitor stuck behind the loader.
     const failsafeTimer = runLoader ? setTimeout(triggerDismiss, 8000) : undefined;
 
-    // The loader always finishes on its own after 2–3 seconds, once the first
-    // 20 frames are ready. It never waits for a click, tap or key press.
+    // The bar only reaches 100% once the 2.2s tween has run and the first 20
+    // frames are in; then the loader slides away on its own.
+    const finishProgress = () => {
+      if (!progressBarRef.current) {
+        dismissLoader();
+        return;
+      }
+      gsap.to(progressBarRef.current, {
+        scaleX: 1,
+        duration: 0.2,
+        ease: 'none',
+        onComplete: () => dismissLoader(),
+      });
+    };
+
+    // The loader always finishes on its own after 2–3 seconds. It never waits
+    // for a click, tap or key press.
     const checkReady = () => {
       if (!runLoader || isCancelled || finishTriggered) return;
       const elapsed = Date.now() - startTime;
 
-      if ((elapsed >= 2000 && loadedInitial20) || elapsed >= 3000) {
-        triggerDismiss();
+      if ((elapsed >= 2200 && loadedInitial20) || elapsed >= 2800) {
+        // Hard cap: the bar completes at ~3s even if frames are still coming.
+        finishTriggered = true;
+        finishProgress();
       } else {
         setTimeout(checkReady, 50);
       }
     };
 
-    // Preload initial 20 frames at high priority; progress bar reflects first 20 frames
-    let initialLoadedCount = 0;
+    // Preload initial 20 frames at high priority
     const initialLoads: Promise<void>[] = [];
     for (let i = 0; i < 20; i++) {
       initialLoads.push(
         fetchFrameBlob(i, true).then(async (blob) => {
-          initialLoadedCount++;
-          const pct = Math.min(1, initialLoadedCount / 20);
-          if (progressBarRef.current) {
-            gsap.to(progressBarRef.current, {
-              scaleX: pct,
-              duration: 0.15,
-              ease: 'power1.out',
-              transformOrigin: 'left',
-            });
-          }
           if (blob && typeof createImageBitmap !== 'undefined') {
             const bmp = await createImageBitmap(blob);
             if (!isCancelled) {
@@ -557,6 +580,58 @@ export default function Hero() {
       if (runLoader) unlockScroll();
     };
   }, [fetchFrameBlob, drawFrame, startAudio, dismissLoader, getFramePath, pumpFetchQueue]);
+
+  // Remember the home-page position so Back from /malaysia lands where you were.
+  useEffect(() => {
+    let lastY = window.scrollY;
+    const onScroll = () => {
+      lastY = window.scrollY;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      try {
+        sessionStorage.setItem(SCROLL_KEY, String(lastY));
+      } catch {
+        // Private mode without storage: Back just starts at the top.
+      }
+    };
+  }, []);
+
+  // Client-side return (e.g. from /malaysia): no loader, no scroll lock.
+  // Honour #hash if present, otherwise restore the saved position.
+  useEffect(() => {
+    if (loaderShouldRun.current) return; // full load: the loader starts at the top
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      ScrollTrigger.refresh();
+
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        const hash = window.location.hash.slice(1);
+        const target = hash ? document.getElementById(hash) : null;
+        if (target) {
+          scrollLenisTo(target);
+          return;
+        }
+        let y = 0;
+        try {
+          y = Number(sessionStorage.getItem(SCROLL_KEY)) || 0;
+        } catch {
+          y = 0;
+        }
+        if (y > 0) scrollLenisTo(y);
+      });
+    }, 100);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const mapProgressToFrame = (p: number): number => {
     if (p <= 0.15) {
@@ -671,7 +746,10 @@ export default function Hero() {
             </span>
           </div>
 
-          <span className="text-mono text-xs sm:text-sm text-[#8a8a85] tracking-widest mb-6">
+          <span
+            ref={vslNameRef}
+            className="text-mono text-xs sm:text-sm text-[#8a8a85] tracking-widest mb-6 opacity-0"
+          >
             VAIGUNTHAN SL
           </span>
 
@@ -680,6 +758,7 @@ export default function Hero() {
             <div
               ref={progressBarRef}
               className="h-full bg-[#d93025] w-full transform origin-left"
+              style={{ transform: 'scaleX(0)' }}
             />
           </div>
 

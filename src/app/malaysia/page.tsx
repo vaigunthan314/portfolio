@@ -91,7 +91,7 @@ export default function MalaysiaPage() {
       {/* Fixed minimal nav (56px) */}
       <nav className="fixed top-0 left-0 right-0 z-50 bg-[#0a0a0a] border-b border-[#8a8a85] px-6 md:px-12 h-14 flex items-center justify-between">
         <Link
-          href="/"
+          href="/#education"
           className="text-mono text-[#f4f3ef] hover:text-[#d93025] transition-colors text-[11px] sm:text-[12px]"
           data-hover
         >
