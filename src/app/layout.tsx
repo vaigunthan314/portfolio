@@ -37,8 +37,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
+  modal,
 }: Readonly<{
   children: React.ReactNode;
+  modal?: React.ReactNode;
 }>) {
   return (
     <html lang="en">
@@ -50,7 +52,7 @@ export default function RootLayout({
         />
       </head>
       <body className="film-grain bg-[#0a0a0a] text-[#f4f3ef]">
-        <SoundProvider>{children}</SoundProvider>
+        <SoundProvider>{children}{modal}</SoundProvider>
       </body>
     </html>
   );
