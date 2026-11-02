@@ -6,10 +6,63 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { TOTAL_FRAMES, FRAME_PATH, FRAME_MOBILE_PATH } from '@/data/content';
 import { useReducedMotion } from '@/hooks/useMediaQuery';
 import { useSound } from '@/context/SoundContext';
+import { stopLenis, startLenis, scrollLenisToTop } from './SmoothScroll';
 
 gsap.registerPlugin(ScrollTrigger);
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
+const BLOCKED_KEYS = new Set([' ', 'Space', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End']);
+
+let isScrollLocked = false;
+let releaseScrollLock: (() => void) | null = null;
+
+/** Freeze the page while the intro loader is visible. */
+function lockScroll() {
+  if (typeof window === 'undefined' || isScrollLocked) return;
+  isScrollLocked = true;
+
+  const root = document.documentElement;
+  root.classList.add('loading');
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  window.scrollTo(0, 0);
+  scrollLenisToTop();
+  stopLenis();
+
+  const options: AddEventListenerOptions = { capture: true, passive: false };
+  const block = (e: Event) => e.preventDefault();
+  const blockKeys = (e: KeyboardEvent) => {
+    if (BLOCKED_KEYS.has(e.key) || BLOCKED_KEYS.has(e.code)) e.preventDefault();
+  };
+  const reset = () => {
+    window.scrollTo(0, 0);
+    scrollLenisToTop();
+  };
+
+  window.addEventListener('wheel', block, options);
+  window.addEventListener('touchmove', block, options);
+  window.addEventListener('keydown', blockKeys, options);
+  window.addEventListener('scroll', reset, { capture: true, passive: true });
+
+  releaseScrollLock = () => {
+    window.removeEventListener('wheel', block, true);
+    window.removeEventListener('touchmove', block, true);
+    window.removeEventListener('keydown', blockKeys, true);
+    window.removeEventListener('scroll', reset, true);
+    root.classList.remove('loading');
+    window.scrollTo(0, 0);
+    scrollLenisToTop();
+    startLenis();
+    ScrollTrigger.refresh();
+  };
+}
+
+function unlockScroll() {
+  if (!isScrollLocked || !releaseScrollLock) return;
+  isScrollLocked = false;
+  releaseScrollLock();
+  releaseScrollLock = null;
+}
 
 interface FrameEdgeColors {
   top: [number, number, number];
@@ -72,19 +125,18 @@ export default function Hero() {
   // Intro loader states & audio
   const loaderRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
-  const [showEnterButton, setShowEnterButton] = useState<boolean>(false);
-  const [isLoaderDismissed, setIsLoaderDismissed] = useState<boolean>(false);
+  // The inline head script adds `loading` before first paint on a full load of
+  // `/`. If it is missing, this is a client-side remount (back from /malaysia),
+  // so the loader must stay dismissed.
+  const loaderShouldRun = useRef<boolean | null>(null);
+  if (loaderShouldRun.current === null) {
+    loaderShouldRun.current =
+      typeof document !== 'undefined' && document.documentElement.classList.contains('loading');
+  }
+  const [isLoaderDismissed, setIsLoaderDismissed] = useState<boolean>(!loaderShouldRun.current);
 
   const reducedMotion = useReducedMotion();
-  const {
-    soundOn,
-    hasEnded,
-    showTapHint,
-    toggleSound,
-    startAudio,
-    isAudible,
-    playFromUserGesture,
-  } = useSound();
+  const { soundOn, hasEnded, showTapHint, toggleSound, startAudio } = useSound();
 
   // Helper to resolve mobile vs desktop frame asset path
   const getFramePath = useCallback((idx: number) => {
@@ -365,37 +417,33 @@ export default function Hero() {
     };
   }, [sizeCanvas, drawFrame]);
 
+  const loaderDoneRef = useRef(false);
+
   const dismissLoader = useCallback(() => {
+    const finish = () => {
+      loaderDoneRef.current = true;
+      setIsLoaderDismissed(true);
+      unlockScroll();
+    };
     if (loaderRef.current) {
       gsap.to(loaderRef.current, {
         yPercent: -100,
         duration: 0.85,
         ease: 'power4.inOut',
-        onComplete: () => {
-          setIsLoaderDismissed(true);
-          ScrollTrigger.refresh();
-        },
+        onComplete: finish,
       });
     } else {
-      setIsLoaderDismissed(true);
+      finish();
     }
   }, []);
-
-  const handleEnter = useCallback(() => {
-    playFromUserGesture();
-    dismissLoader();
-  }, [playFromUserGesture, dismissLoader]);
-
-  // If audio is already audible or becomes audible while ENTER is shown, slide away automatically
-  useEffect(() => {
-    if (showEnterButton && isAudible() && !isLoaderDismissed) {
-      dismissLoader();
-    }
-  }, [showEnterButton, isAudible, isLoaderDismissed, dismissLoader]);
 
   // Load frames-meta.json and start progressive loader + audio flow
   useEffect(() => {
     let isCancelled = false;
+    // Only a full page load of the home page shows the loader.
+    const runLoader = loaderShouldRun.current === true && !loaderDoneRef.current;
+
+    if (runLoader) lockScroll();
 
     fetch('/frames-meta.json')
       .then((res) => res.json())
@@ -407,8 +455,8 @@ export default function Hero() {
       })
       .catch(() => {});
 
-    // Audio is the first thing called when the loader mounts
-    startAudio();
+    // Audio is the first thing called when the loader mounts (never blocks it)
+    if (runLoader) startAudio();
 
     // VSL initials animation
     const letters = ['.vsl-char-0', '.vsl-char-1', '.vsl-char-2'];
@@ -441,20 +489,23 @@ export default function Hero() {
     let loadedInitial20 = false;
     let finishTriggered = false;
 
-    // Loader lasts 2 to 3 seconds. Dismisses automatically if audio audible, else shows ENTER.
-    const checkReady = () => {
-      if (isCancelled || isLoaderDismissed || finishTriggered) return;
-      const elapsed = Date.now() - startTime;
-      const minDelay = 2000;
-      const maxDelay = 3000;
+    const triggerDismiss = () => {
+      if (!runLoader || isCancelled || finishTriggered) return;
+      finishTriggered = true;
+      dismissLoader();
+    };
 
-      if ((elapsed >= minDelay && loadedInitial20) || elapsed >= maxDelay) {
-        finishTriggered = true;
-        if (isAudible()) {
-          dismissLoader();
-        } else {
-          setShowEnterButton(true);
-        }
+    // Failsafe: never leave a visitor stuck behind the loader.
+    const failsafeTimer = runLoader ? setTimeout(triggerDismiss, 8000) : undefined;
+
+    // The loader always finishes on its own after 2–3 seconds, once the first
+    // 20 frames are ready. It never waits for a click, tap or key press.
+    const checkReady = () => {
+      if (!runLoader || isCancelled || finishTriggered) return;
+      const elapsed = Date.now() - startTime;
+
+      if ((elapsed >= 2000 && loadedInitial20) || elapsed >= 3000) {
+        triggerDismiss();
       } else {
         setTimeout(checkReady, 50);
       }
@@ -502,17 +553,10 @@ export default function Hero() {
 
     return () => {
       isCancelled = true;
+      if (failsafeTimer) clearTimeout(failsafeTimer);
+      if (runLoader) unlockScroll();
     };
-  }, [
-    fetchFrameBlob,
-    drawFrame,
-    startAudio,
-    isLoaderDismissed,
-    dismissLoader,
-    getFramePath,
-    pumpFetchQueue,
-    isAudible,
-  ]);
+  }, [fetchFrameBlob, drawFrame, startAudio, dismissLoader, getFramePath, pumpFetchQueue]);
 
   const mapProgressToFrame = (p: number): number => {
     if (p <= 0.15) {
@@ -610,7 +654,7 @@ export default function Hero() {
       {/* Intro Loader Screen (Solid #0a0a0a, Letter-by-Letter VSL, Thin Red Progress Bar) */}
       <div
         ref={loaderRef}
-        className={`fixed inset-0 z-[10000] bg-[#0a0a0a] flex flex-col items-center justify-center transition-opacity ${
+        className={`fixed inset-0 z-[100000] bg-[#0a0a0a] flex flex-col items-center justify-center transition-opacity ${
           isLoaderDismissed ? 'pointer-events-none opacity-0' : 'opacity-100'
         }`}
       >
@@ -639,22 +683,11 @@ export default function Hero() {
             />
           </div>
 
-          {/* Solid outlined button "ENTER" centred under the progress bar */}
-          {showEnterButton && (
-            <button
-              id="loader-enter-btn"
-              onClick={handleEnter}
-              type="button"
-              className="mt-8 px-8 py-2.5 text-mono text-[14px] font-medium tracking-widest text-[#d93025] border border-[#d93025] bg-[#0a0a0a] hover:bg-[#d93025] hover:text-[#f4f3ef] transition-colors cursor-pointer"
-            >
-              ENTER
-            </button>
-          )}
         </div>
 
         {/* Fixed bottom-right sound button (24px margin, mono 12px, outlined, solid colours) */}
         <div className="absolute bottom-6 right-6 z-20 flex items-center gap-3">
-          {!showEnterButton && showTapHint && (
+          {showTapHint && (
             <span className="text-mono text-[11px] sm:text-[12px] text-[#d93025] tracking-wider animate-pulse">
               TAP ANYWHERE FOR SOUND
             </span>

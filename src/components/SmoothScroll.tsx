@@ -7,6 +7,21 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
 gsap.registerPlugin(ScrollTrigger);
 
+// One shared instance: the intro loader stops/starts this one, never a second.
+let globalLenis: Lenis | null = null;
+
+export function stopLenis(): void {
+  globalLenis?.stop();
+}
+
+export function startLenis(): void {
+  globalLenis?.start();
+}
+
+export function scrollLenisToTop(): void {
+  globalLenis?.scrollTo(0, { immediate: true });
+}
+
 export default function SmoothScroll({ children }: { children?: React.ReactNode }) {
   const lenisRef = useRef<Lenis | null>(null);
 
@@ -20,6 +35,12 @@ export default function SmoothScroll({ children }: { children?: React.ReactNode 
     });
 
     lenisRef.current = lenis;
+    globalLenis = lenis;
+
+    // Start stopped if the intro loader is still on screen (html.loading)
+    if (typeof document !== 'undefined' && document.documentElement.classList.contains('loading')) {
+      lenis.stop();
+    }
 
     // Synchronize Lenis scroll with GSAP ScrollTrigger
     lenis.on('scroll', ScrollTrigger.update);
@@ -34,6 +55,7 @@ export default function SmoothScroll({ children }: { children?: React.ReactNode 
     return () => {
       gsap.ticker.remove(tickerCallback);
       lenis.destroy();
+      if (globalLenis === lenis) globalLenis = null;
     };
   }, []);
 

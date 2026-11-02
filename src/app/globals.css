@@ -24,6 +24,15 @@
   }
 }
 
+/* Scroll is locked before first paint while the intro loader is visible. */
+html.loading,
+html.loading body {
+  overflow: hidden !important;
+  height: 100% !important;
+  overscroll-behavior: none !important;
+  touch-action: none !important;
+}
+
 html {
   scroll-behavior: auto;
   background-color: #0a0a0a;
