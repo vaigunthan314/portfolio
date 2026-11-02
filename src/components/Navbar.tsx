@@ -6,10 +6,9 @@ import { useSound } from '@/context/SoundContext';
 
 export default function Navbar() {
   const { soundOn, hasEnded, toggleSound } = useSound();
+  const [scrollProgress, setScrollProgress] = useState<number>(0);
   const [activeSection, setActiveSection] = useState<string>('');
   const [visible, setVisible] = useState<boolean>(false);
-  const progressBarRef = useRef<HTMLDivElement>(null);
-  const visibleRef = useRef<boolean>(false);
   const lastScrollYRef = useRef<number>(0);
 
   useEffect(() => {
@@ -17,9 +16,7 @@ export default function Navbar() {
       const scrollY = window.scrollY;
       const totalDoc = document.documentElement.scrollHeight - window.innerHeight;
       const pct = totalDoc > 0 ? scrollY / totalDoc : 0;
-      if (progressBarRef.current) {
-        progressBarRef.current.style.transform = `scaleX(${pct})`;
-      }
+      setScrollProgress(pct);
 
       // Hero check: hide header completely during the pinned hero
       const hero = document.getElementById('hero');
@@ -29,17 +26,12 @@ export default function Navbar() {
 
       if (scrollY < heroEnd) {
         // Completely hidden during hero
-        if (visibleRef.current) {
-          visibleRef.current = false;
-          setVisible(false);
-        }
+        setVisible(false);
       } else {
         // After hero ends: show when scrolling up or at rest
         const isScrollingUp = scrollY < lastScrollYRef.current;
-        const shouldBeVisible = isScrollingUp || scrollY > heroEnd + 100;
-        if (visibleRef.current !== shouldBeVisible) {
-          visibleRef.current = shouldBeVisible;
-          setVisible(shouldBeVisible);
+        if (isScrollingUp || scrollY > heroEnd + 100) {
+          setVisible(true);
         }
       }
 
@@ -107,9 +99,8 @@ export default function Navbar() {
     <>
       {/* Solid Red Scroll Progress Bar */}
       <div
-        ref={progressBarRef}
         className="scroll-progress-bar"
-        style={{ transform: 'scaleX(0)' }}
+        style={{ transform: `scaleX(${scrollProgress})` }}
       />
 
       {/* Slimmer (56px) Navigation Bar: Hidden during pinned hero */}

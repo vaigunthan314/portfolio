@@ -6,85 +6,8 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { TOTAL_FRAMES, FRAME_PATH, FRAME_MOBILE_PATH } from '@/data/content';
 import { useReducedMotion } from '@/hooks/useMediaQuery';
 import { useSound } from '@/context/SoundContext';
-import { stopLenis, startLenis, scrollLenisToTop } from './SmoothScroll';
 
 gsap.registerPlugin(ScrollTrigger);
-
-const BLOCKED_KEYS = new Set([
-  'Space',
-  ' ',
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-  'PageUp',
-  'PageDown',
-  'Home',
-  'End',
-]);
-
-const preventCapture = (e: Event) => {
-  e.preventDefault();
-  e.stopPropagation();
-};
-
-const preventKeysCapture = (e: KeyboardEvent) => {
-  if (BLOCKED_KEYS.has(e.key) || BLOCKED_KEYS.has(e.code)) {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-};
-
-const forceScrollZeroCapture = (e: Event) => {
-  window.scrollTo(0, 0);
-  scrollLenisToTop();
-  e.preventDefault();
-  e.stopPropagation();
-};
-
-let isScrollLocked = false;
-
-function lockScroll() {
-  if (typeof window === 'undefined' || isScrollLocked) return;
-  isScrollLocked = true;
-
-  document.documentElement.classList.add('loading');
-  if ('scrollRestoration' in history) {
-    history.scrollRestoration = 'manual';
-  }
-  window.scrollTo(0, 0);
-  scrollLenisToTop();
-  stopLenis();
-
-  // Make sure ScrollTrigger ignores scroll input until unlock
-  ScrollTrigger.getAll().forEach((st) => st.disable(false));
-
-  window.addEventListener('wheel', preventCapture, { capture: true, passive: false });
-  window.addEventListener('touchmove', preventCapture, { capture: true, passive: false });
-  window.addEventListener('keydown', preventKeysCapture, { capture: true, passive: false });
-  window.addEventListener('scroll', forceScrollZeroCapture, { capture: true, passive: false });
-}
-
-function unlockScroll() {
-  if (typeof window === 'undefined' || !isScrollLocked) return;
-  isScrollLocked = false;
-
-  window.removeEventListener('wheel', preventCapture, true);
-  window.removeEventListener('touchmove', preventCapture, true);
-  window.removeEventListener('keydown', preventKeysCapture, true);
-  window.removeEventListener('scroll', forceScrollZeroCapture, true);
-
-  document.documentElement.classList.remove('loading');
-
-  window.scrollTo(0, 0);
-  scrollLenisToTop();
-
-  startLenis();
-
-  // Re-enable ScrollTriggers and refresh once
-  ScrollTrigger.getAll().forEach((st) => st.enable(false, false));
-  ScrollTrigger.refresh();
-}
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
@@ -118,21 +41,15 @@ export default function Hero() {
   const nativeWidthRef = useRef<number>(1920);
   const nativeHeightRef = useRef<number>(1080);
 
-  // Memory-safe ImageBitmap sliding window cache (+/-12 on mobile, +/-20 on desktop)
+  // Memory-safe ImageBitmap sliding window cache (+/-20 frames)
   const blobCacheRef = useRef<(Blob | null)[]>(new Array(TOTAL_FRAMES).fill(null));
   const bitmapCacheRef = useRef<Map<number, ImageBitmap>>(new Map());
   const decodingSetRef = useRef<Set<number>>(new Set());
-  const activeDecodesRef = useRef<number>(0);
 
-  // Background fetch management (max 3 concurrent, AbortController per active request)
+  // Priority queue for background fetches (at most 4 concurrent, nearest to scroll position)
   const activeFetchesRef = useRef<number>(0);
   const fetchingSetRef = useRef<Set<number>>(new Set());
-  const abortControllersRef = useRef<Map<number, AbortController>>(new Map());
   const currentTargetFrameRef = useRef<number>(0);
-
-  // Letterbox color cache to prevent redundant DOM updates
-  const lastEdgeColorKeyRef = useRef<string>('');
-  const lastContainerBgIsWhiteRef = useRef<boolean>(false);
 
   // Frame metadata (edge colors for letterbox fill)
   const framesMetaRef = useRef<FrameEdgeColors[] | null>(null);
@@ -155,6 +72,7 @@ export default function Hero() {
   // Intro loader states & audio
   const loaderRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const [showEnterButton, setShowEnterButton] = useState<boolean>(false);
   const [isLoaderDismissed, setIsLoaderDismissed] = useState<boolean>(false);
 
   const reducedMotion = useReducedMotion();
@@ -164,6 +82,8 @@ export default function Hero() {
     showTapHint,
     toggleSound,
     startAudio,
+    isAudible,
+    playFromUserGesture,
   } = useSound();
 
   // Helper to resolve mobile vs desktop frame asset path
@@ -235,26 +155,20 @@ export default function Hero() {
     if (rightBarRef.current) rightBarRef.current.style.width = `${Math.ceil(cssX)}px`;
   }, []);
 
-  // Fetch frame blob progressively (supports priority high for initial frames, AbortSignal for fast scrolling)
-  const fetchFrameBlob = useCallback(
-    async (idx: number, isHighPriority = false, signal?: AbortSignal): Promise<Blob | null> => {
-      if (blobCacheRef.current[idx]) return blobCacheRef.current[idx];
-      try {
-        const init: RequestInit = {
-          priority: isHighPriority ? 'high' : 'auto',
-          signal,
-        };
-        const res = await fetch(getFramePath(idx), init);
-        if (!res.ok) return null;
-        const b = await res.blob();
-        blobCacheRef.current[idx] = b;
-        return b;
-      } catch {
-        return null;
-      }
-    },
-    [getFramePath]
-  );
+  // Fetch frame blob progressively (supports priority high for initial frames)
+  const fetchFrameBlob = useCallback(async (idx: number, isHighPriority = false): Promise<Blob | null> => {
+    if (blobCacheRef.current[idx]) return blobCacheRef.current[idx];
+    try {
+      const init: RequestInit = isHighPriority ? { priority: 'high' } : {};
+      const res = await fetch(getFramePath(idx), init);
+      if (!res.ok) return null;
+      const b = await res.blob();
+      blobCacheRef.current[idx] = b;
+      return b;
+    } catch {
+      return null;
+    }
+  }, [getFramePath]);
 
   // Draw frame on canvas (draws only when frame index changes)
   const drawFrame = useCallback((frameIdx: number, force = false) => {
@@ -288,115 +202,38 @@ export default function Hero() {
     // Draw frame pixels at native resolution
     ctx.drawImage(bmp, 0, 0, nativeWidthRef.current, nativeHeightRef.current);
 
-    // Update letterbox bars with sampled edge colors only when color changed
+    // Update letterbox bars with sampled edge colors
     const meta = framesMetaRef.current ? framesMetaRef.current[clampedIdx] : null;
-    const colorKey = meta
-      ? `${meta.top.join(',')}_${meta.bottom.join(',')}_${meta.left.join(',')}_${meta.right.join(',')}`
-      : clampedIdx >= 215 ? 'white' : 'dark';
+    if (meta) {
+      const topColor = `rgb(${meta.top[0]}, ${meta.top[1]}, ${meta.top[2]})`;
+      const bottomColor = `rgb(${meta.bottom[0]}, ${meta.bottom[1]}, ${meta.bottom[2]})`;
+      const leftColor = `rgb(${meta.left[0]}, ${meta.left[1]}, ${meta.left[2]})`;
+      const rightColor = `rgb(${meta.right[0]}, ${meta.right[1]}, ${meta.right[2]})`;
 
-    if (colorKey !== lastEdgeColorKeyRef.current) {
-      lastEdgeColorKeyRef.current = colorKey;
-      if (meta) {
-        const topColor = `rgb(${meta.top[0]}, ${meta.top[1]}, ${meta.top[2]})`;
-        const bottomColor = `rgb(${meta.bottom[0]}, ${meta.bottom[1]}, ${meta.bottom[2]})`;
-        const leftColor = `rgb(${meta.left[0]}, ${meta.left[1]}, ${meta.left[2]})`;
-        const rightColor = `rgb(${meta.right[0]}, ${meta.right[1]}, ${meta.right[2]})`;
-
-        if (topBarRef.current) topBarRef.current.style.backgroundColor = topColor;
-        if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = bottomColor;
-        if (leftBarRef.current) leftBarRef.current.style.backgroundColor = leftColor;
-        if (rightBarRef.current) rightBarRef.current.style.backgroundColor = rightColor;
-      } else {
-        const fallbackColor = clampedIdx >= 215 ? '#fcfcfc' : '#0a0a0a';
-        if (topBarRef.current) topBarRef.current.style.backgroundColor = fallbackColor;
-        if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = fallbackColor;
-        if (leftBarRef.current) leftBarRef.current.style.backgroundColor = fallbackColor;
-        if (rightBarRef.current) rightBarRef.current.style.backgroundColor = fallbackColor;
-      }
+      if (topBarRef.current) topBarRef.current.style.backgroundColor = topColor;
+      if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = bottomColor;
+      if (leftBarRef.current) leftBarRef.current.style.backgroundColor = leftColor;
+      if (rightBarRef.current) rightBarRef.current.style.backgroundColor = rightColor;
+    } else {
+      const fallbackColor = clampedIdx >= 215 ? '#fcfcfc' : '#0a0a0a';
+      if (topBarRef.current) topBarRef.current.style.backgroundColor = fallbackColor;
+      if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = fallbackColor;
+      if (leftBarRef.current) leftBarRef.current.style.backgroundColor = fallbackColor;
+      if (rightBarRef.current) rightBarRef.current.style.backgroundColor = fallbackColor;
     }
   }, []);
 
-  // Decode queue: max 2 concurrent off-thread createImageBitmap calls within sliding window (+/-12 mobile, +/-20 desktop)
-  const pumpDecodeQueueRef = useRef<() => void>(() => {});
-
-  const pumpDecodeQueue = useCallback(() => {
-    if (typeof window === 'undefined' || typeof createImageBitmap === 'undefined') return;
-    const maxConcurrentDecodes = 2;
-    const windowSize = isMobileRef.current ? 12 : 20;
-    const target = currentTargetFrameRef.current;
-    const minIdx = Math.max(0, target - windowSize);
-    const maxIdx = Math.min(TOTAL_FRAMES - 1, target + windowSize);
-
-    while (activeDecodesRef.current < maxConcurrentDecodes) {
-      let bestIdx = -1;
-      let minDistance = Infinity;
-
-      for (let i = minIdx; i <= maxIdx; i++) {
-        if (!bitmapCacheRef.current.has(i) && !decodingSetRef.current.has(i) && blobCacheRef.current[i]) {
-          const dist = Math.abs(i - target);
-          if (dist < minDistance) {
-            minDistance = dist;
-            bestIdx = i;
-          }
-        }
-      }
-
-      if (bestIdx === -1) break;
-
-      const idxToDecode = bestIdx;
-      decodingSetRef.current.add(idxToDecode);
-      activeDecodesRef.current++;
-
-      createImageBitmap(blobCacheRef.current[idxToDecode]!)
-        .then((bmp) => {
-          const curTarget = currentTargetFrameRef.current;
-          const curMin = Math.max(0, curTarget - windowSize);
-          const curMax = Math.min(TOTAL_FRAMES - 1, curTarget + windowSize);
-          if (idxToDecode >= curMin && idxToDecode <= curMax) {
-            bitmapCacheRef.current.set(idxToDecode, bmp);
-            if (lastDrawnFrameRef.current === idxToDecode) {
-              drawFrame(idxToDecode, true);
-            }
-          } else {
-            bmp.close();
-          }
-        })
-        .catch(() => {})
-        .finally(() => {
-          decodingSetRef.current.delete(idxToDecode);
-          activeDecodesRef.current = Math.max(0, activeDecodesRef.current - 1);
-          pumpDecodeQueueRef.current();
-        });
-    }
-  }, [drawFrame]);
-
-  useEffect(() => {
-    pumpDecodeQueueRef.current = pumpDecodeQueue;
-  }, [pumpDecodeQueue]);
-
-  // Queue of at most 3 background connections nearest to current target scroll position
+  // Queue of at most 4 background connections nearest to current target scroll position
   const pumpFetchQueueRef = useRef<() => void>(() => {});
 
   const pumpFetchQueue = useCallback(() => {
     if (typeof window === 'undefined') return;
-    const maxConcurrent = 3;
-    const windowSize = isMobileRef.current ? 12 : 20;
-    const target = currentTargetFrameRef.current;
+    const maxConcurrent = 4;
 
-    // 1. Cancel active fetches that are far from the current scroll position (> windowSize + 10)
-    for (const [idx, controller] of abortControllersRef.current.entries()) {
-      if (Math.abs(idx - target) > windowSize + 10) {
-        controller.abort();
-        abortControllersRef.current.delete(idx);
-        fetchingSetRef.current.delete(idx);
-        activeFetchesRef.current = Math.max(0, activeFetchesRef.current - 1);
-      }
-    }
-
-    // 2. Spawn up to maxConcurrent fetches nearest to target
     while (activeFetchesRef.current < maxConcurrent) {
       let bestIdx = -1;
       let minDistance = Infinity;
+      const target = currentTargetFrameRef.current;
 
       for (let i = 0; i < TOTAL_FRAMES; i++) {
         if (!blobCacheRef.current[i] && !fetchingSetRef.current.has(i)) {
@@ -411,45 +248,55 @@ export default function Hero() {
       if (bestIdx === -1) break;
 
       const idxToFetch = bestIdx;
-      const controller = new AbortController();
-      abortControllersRef.current.set(idxToFetch, controller);
       fetchingSetRef.current.add(idxToFetch);
       activeFetchesRef.current++;
 
-      fetchFrameBlob(idxToFetch, false, controller.signal)
-        .then((blob) => {
-          if (blob) {
-            pumpDecodeQueueRef.current();
-          }
-        })
-        .finally(() => {
-          abortControllersRef.current.delete(idxToFetch);
-          fetchingSetRef.current.delete(idxToFetch);
-          activeFetchesRef.current = Math.max(0, activeFetchesRef.current - 1);
-          pumpFetchQueueRef.current();
-        });
+      fetchFrameBlob(idxToFetch).finally(() => {
+        fetchingSetRef.current.delete(idxToFetch);
+        activeFetchesRef.current--;
+
+        const currentTarget = currentTargetFrameRef.current;
+        if (
+          Math.abs(idxToFetch - currentTarget) <= 20 &&
+          blobCacheRef.current[idxToFetch] &&
+          !bitmapCacheRef.current.has(idxToFetch)
+        ) {
+          createImageBitmap(blobCacheRef.current[idxToFetch]!)
+            .then((bmp) => {
+              if (Math.abs(idxToFetch - currentTargetFrameRef.current) <= 20) {
+                bitmapCacheRef.current.set(idxToFetch, bmp);
+                if (lastDrawnFrameRef.current === idxToFetch) {
+                  drawFrame(idxToFetch, true);
+                }
+              } else {
+                bmp.close();
+              }
+            })
+            .catch(() => {});
+        }
+        pumpFetchQueueRef.current();
+      });
     }
-  }, [fetchFrameBlob]);
+  }, [fetchFrameBlob, drawFrame]);
 
   useEffect(() => {
     pumpFetchQueueRef.current = pumpFetchQueue;
   }, [pumpFetchQueue]);
 
-  // Sliding window ImageBitmap cache manager (+/-12 on mobile, +/-20 on desktop)
+  // Sliding window ImageBitmap cache manager (+/-20 frames)
   const updateBitmapWindow = useCallback(
     (centerIdx: number) => {
       if (typeof window === 'undefined' || typeof createImageBitmap === 'undefined') return;
       currentTargetFrameRef.current = centerIdx;
-      pumpFetchQueueRef.current();
+      pumpFetchQueue();
 
       if (Math.abs(centerIdx - lastCenterIdxRef.current) < 2) return;
       lastCenterIdxRef.current = centerIdx;
 
-      const windowSize = isMobileRef.current ? 12 : 20;
-      const minIdx = Math.max(0, centerIdx - windowSize);
-      const maxIdx = Math.min(TOTAL_FRAMES - 1, centerIdx + windowSize);
+      const minIdx = Math.max(0, centerIdx - 20);
+      const maxIdx = Math.min(TOTAL_FRAMES - 1, centerIdx + 20);
 
-      // 1. Evict bitmaps outside sliding window
+      // 1. Evict bitmaps outside sliding window (+/-20 frames)
       for (const [key, bmp] of bitmapCacheRef.current.entries()) {
         if (key < minIdx || key > maxIdx) {
           bmp.close();
@@ -458,9 +305,35 @@ export default function Hero() {
       }
 
       // 2. Decode missing frames within window nearest to centerIdx
-      pumpDecodeQueueRef.current();
+      const missingIndices: number[] = [];
+      for (let i = minIdx; i <= maxIdx; i++) {
+        if (!bitmapCacheRef.current.has(i) && !decodingSetRef.current.has(i) && blobCacheRef.current[i]) {
+          missingIndices.push(i);
+        }
+      }
+      missingIndices.sort((a, b) => Math.abs(a - centerIdx) - Math.abs(b - centerIdx));
+
+      for (let j = 0; j < Math.min(missingIndices.length, 6); j++) {
+        const i = missingIndices[j];
+        decodingSetRef.current.add(i);
+        createImageBitmap(blobCacheRef.current[i]!)
+          .then((bmp) => {
+            decodingSetRef.current.delete(i);
+            if (i >= minIdx && i <= maxIdx) {
+              bitmapCacheRef.current.set(i, bmp);
+              if (lastDrawnFrameRef.current === i) {
+                drawFrame(i, true);
+              }
+            } else {
+              bmp.close();
+            }
+          })
+          .catch(() => {
+            decodingSetRef.current.delete(i);
+          });
+      }
     },
-    []
+    [drawFrame, pumpFetchQueue]
   );
 
   useIsomorphicLayoutEffect(() => {
@@ -478,7 +351,7 @@ export default function Hero() {
         sizeCanvas();
         drawFrame(lastDrawnFrameRef.current, true);
         ScrollTrigger.refresh();
-      }, 150);
+      }, 50);
     };
 
     const ro = new ResizeObserver(handleResize);
@@ -500,21 +373,29 @@ export default function Hero() {
         ease: 'power4.inOut',
         onComplete: () => {
           setIsLoaderDismissed(true);
-          unlockScroll();
+          ScrollTrigger.refresh();
         },
       });
     } else {
       setIsLoaderDismissed(true);
-      unlockScroll();
     }
   }, []);
+
+  const handleEnter = useCallback(() => {
+    playFromUserGesture();
+    dismissLoader();
+  }, [playFromUserGesture, dismissLoader]);
+
+  // If audio is already audible or becomes audible while ENTER is shown, slide away automatically
+  useEffect(() => {
+    if (showEnterButton && isAudible() && !isLoaderDismissed) {
+      dismissLoader();
+    }
+  }, [showEnterButton, isAudible, isLoaderDismissed, dismissLoader]);
 
   // Load frames-meta.json and start progressive loader + audio flow
   useEffect(() => {
     let isCancelled = false;
-
-    // Lock scroll while loader is visible
-    lockScroll();
 
     fetch('/frames-meta.json')
       .then((res) => res.json())
@@ -560,26 +441,20 @@ export default function Hero() {
     let loadedInitial20 = false;
     let finishTriggered = false;
 
-    const triggerDismiss = () => {
-      if (finishTriggered || isCancelled) return;
-      finishTriggered = true;
-      dismissLoader();
-    };
-
-    // Failsafe: if loading is not finished after 8 seconds, slide away anyway and unlock
-    const failsafeTimer = setTimeout(() => {
-      triggerDismiss();
-    }, 8000);
-
-    // Loader lasts 2 to 3 seconds, waiting for the first 20 frames, then slides away on its own
+    // Loader lasts 2 to 3 seconds. Dismisses automatically if audio audible, else shows ENTER.
     const checkReady = () => {
-      if (isCancelled || finishTriggered) return;
+      if (isCancelled || isLoaderDismissed || finishTriggered) return;
       const elapsed = Date.now() - startTime;
       const minDelay = 2000;
       const maxDelay = 3000;
 
       if ((elapsed >= minDelay && loadedInitial20) || elapsed >= maxDelay) {
-        triggerDismiss();
+        finishTriggered = true;
+        if (isAudible()) {
+          dismissLoader();
+        } else {
+          setShowEnterButton(true);
+        }
       } else {
         setTimeout(checkReady, 50);
       }
@@ -619,7 +494,7 @@ export default function Hero() {
     Promise.all(initialLoads).finally(() => {
       loadedInitial20 = true;
       checkReady();
-      // Pump queue for remaining frames (at most 3 at a time)
+      // Pump queue for remaining frames (at most 4 at a time)
       pumpFetchQueue();
     });
 
@@ -627,24 +502,16 @@ export default function Hero() {
 
     return () => {
       isCancelled = true;
-      clearTimeout(failsafeTimer);
-      unlockScroll();
-      for (const controller of abortControllersRef.current.values()) {
-        controller.abort();
-      }
-      abortControllersRef.current.clear();
-      for (const bmp of bitmapCacheRef.current.values()) {
-        bmp.close();
-      }
-      bitmapCacheRef.current.clear();
     };
   }, [
     fetchFrameBlob,
     drawFrame,
     startAudio,
+    isLoaderDismissed,
     dismissLoader,
     getFramePath,
     pumpFetchQueue,
+    isAudible,
   ]);
 
   const mapProgressToFrame = (p: number): number => {
@@ -676,7 +543,7 @@ export default function Hero() {
           end: 'bottom bottom',
           pin: container,
           pinSpacing: true,
-          scrub: 0.3,
+          scrub: 0.1,
           invalidateOnRefresh: true,
           onUpdate: (self) => {
             if (reducedMotion) return;
@@ -689,13 +556,9 @@ export default function Hero() {
             updateBitmapWindow(frameIndex);
             drawFrame(frameIndex);
 
-            const isWhite = progress >= 0.82;
-            if (lastContainerBgIsWhiteRef.current !== isWhite) {
-              lastContainerBgIsWhiteRef.current = isWhite;
-              if (containerRef.current) {
-                containerRef.current.style.backgroundColor =
-                  isWhite ? '#fcfcfc' : '#0a0a0a';
-              }
+            if (containerRef.current) {
+              containerRef.current.style.backgroundColor =
+                progress >= 0.82 ? '#fcfcfc' : '#0a0a0a';
             }
           },
         },
@@ -747,7 +610,7 @@ export default function Hero() {
       {/* Intro Loader Screen (Solid #0a0a0a, Letter-by-Letter VSL, Thin Red Progress Bar) */}
       <div
         ref={loaderRef}
-        className={`fixed inset-0 z-[100000] bg-[#0a0a0a] flex flex-col items-center justify-center transition-opacity ${
+        className={`fixed inset-0 z-[10000] bg-[#0a0a0a] flex flex-col items-center justify-center transition-opacity ${
           isLoaderDismissed ? 'pointer-events-none opacity-0' : 'opacity-100'
         }`}
       >
@@ -775,11 +638,23 @@ export default function Hero() {
               className="h-full bg-[#d93025] w-full transform origin-left"
             />
           </div>
+
+          {/* Solid outlined button "ENTER" centred under the progress bar */}
+          {showEnterButton && (
+            <button
+              id="loader-enter-btn"
+              onClick={handleEnter}
+              type="button"
+              className="mt-8 px-8 py-2.5 text-mono text-[14px] font-medium tracking-widest text-[#d93025] border border-[#d93025] bg-[#0a0a0a] hover:bg-[#d93025] hover:text-[#f4f3ef] transition-colors cursor-pointer"
+            >
+              ENTER
+            </button>
+          )}
         </div>
 
         {/* Fixed bottom-right sound button (24px margin, mono 12px, outlined, solid colours) */}
         <div className="absolute bottom-6 right-6 z-20 flex items-center gap-3">
-          {showTapHint && (
+          {!showEnterButton && showTapHint && (
             <span className="text-mono text-[11px] sm:text-[12px] text-[#d93025] tracking-wider animate-pulse">
               TAP ANYWHERE FOR SOUND
             </span>
@@ -799,10 +674,10 @@ export default function Hero() {
         </div>
       </div>
 
-      {/* Hero Pinned Wrapper (350vh mobile, 450vh desktop: fast, light scroll feel) */}
+      {/* Hero Pinned Wrapper (500vh: clean pin with zero gap to next section) */}
       <div
         ref={wrapperRef}
-        className="hero-pinned-wrapper relative w-full h-[350vh] md:h-[450vh] bg-[#0a0a0a]"
+        className="hero-pinned-wrapper relative w-full h-[500vh] bg-[#0a0a0a]"
         id="hero"
       >
         <div
