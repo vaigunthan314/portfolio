@@ -47,42 +47,74 @@ function MalaysiaMarquee() {
 
 export function MalaysiaContent({ variant }: { variant: 'page' | 'overlay' }) {
   const router = useRouter();
+  const rootRef = useRef<HTMLElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
   const storyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const ctx = gsap.context(() => {
-      gsap.fromTo(
-        '.my-reveal',
-        { y: 30, opacity: 0 },
-        {
-          y: 0,
-          opacity: 1,
-          duration: 0.8,
-          stagger: 0.1,
-          ease: 'power3.out',
-        }
-      );
+    let ctx: gsap.Context | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
-      gsap.fromTo(
-        '.my-story-reveal',
-        { y: 30, opacity: 0 },
-        {
-          y: 0,
-          opacity: 1,
-          duration: 0.7,
-          stagger: 0.08,
-          ease: 'power3.out',
-          scrollTrigger: {
-            trigger: storyRef.current,
-            start: 'top 85%',
-            toggleActions: 'play none none reverse',
-          },
+    const rafId = requestAnimationFrame(() => {
+      const scroller = rootRef.current?.closest('[data-malaysia-overlay]') as HTMLElement | null;
+
+      ctx = gsap.context(() => {
+        gsap.fromTo(
+          '.my-reveal',
+          { y: 30, opacity: 0 },
+          {
+            y: 0,
+            opacity: 1,
+            duration: 0.8,
+            stagger: 0.1,
+            ease: 'power3.out',
+          }
+        );
+
+        if (storyRef.current) {
+          const storyTween = gsap.fromTo(
+            '.my-story-reveal',
+            { y: 30, opacity: 0 },
+            {
+              y: 0,
+              opacity: 1,
+              duration: 0.7,
+              stagger: 0.08,
+              ease: 'power3.out',
+              scrollTrigger: {
+                trigger: storyRef.current,
+                scroller: scroller || undefined,
+                start: 'top 85%',
+                toggleActions: 'play none none reverse',
+              },
+            }
+          );
+          if (scroller) {
+            storyTween.scrollTrigger?.refresh();
+          }
         }
-      );
+      }, rootRef);
+
+      // Safety net: 2 seconds after mount, any reveal element on the Malaysia page
+      // that is still hidden (opacity 0) is set to its final visible state so
+      // content can never stay hidden if scroll-triggered reveals do not fire.
+      fallbackTimer = setTimeout(() => {
+        if (!rootRef.current) return;
+        const hidden = rootRef.current.querySelectorAll<HTMLElement>('.my-reveal, .my-story-reveal');
+        hidden.forEach((el) => {
+          const style = window.getComputedStyle(el);
+          if (style.opacity === '0' || Number(style.opacity) < 0.1) {
+            gsap.to(el, { opacity: 1, y: 0, duration: 0.3, overwrite: 'auto' });
+          }
+        });
+      }, 2000);
     });
 
-    return () => ctx.revert();
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      ctx?.revert();
+    };
   }, []);
 
   return (
@@ -131,7 +163,7 @@ export function MalaysiaContent({ variant }: { variant: 'page' | 'overlay' }) {
       {/* Static noise overlay at 4% opacity (no animated SVG) */}
       <div className="film-grain fixed inset-0 z-[9998] pointer-events-none" />
 
-      <main className="bg-[#0a0a0a] text-[#f4f3ef] pt-14">
+      <main ref={rootRef} className="bg-[#0a0a0a] text-[#f4f3ef] pt-14">
         {/* First Screen: Heading & Photo visible together at 1440x900 without scrolling */}
         <section
           ref={heroRef}

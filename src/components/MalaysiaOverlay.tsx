@@ -34,6 +34,7 @@ export default function MalaysiaOverlay({ children }: { children: ReactNode }) {
   return (
     <div
       ref={rootRef}
+      data-malaysia-overlay
       data-lenis-prevent
       role="dialog"
       aria-modal="true"
