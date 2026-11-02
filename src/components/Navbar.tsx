@@ -12,7 +12,10 @@ export default function Navbar() {
   const lastScrollYRef = useRef<number>(0);
 
   useEffect(() => {
-    const onScroll = () => {
+    // At most one React update per frame, however fast the scroll fires.
+    let raf = 0;
+
+    const applyScroll = () => {
       const scrollY = window.scrollY;
       const totalDoc = document.documentElement.scrollHeight - window.innerHeight;
       const pct = totalDoc > 0 ? scrollY / totalDoc : 0;
@@ -38,8 +41,16 @@ export default function Navbar() {
       lastScrollYRef.current = scrollY;
     };
 
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        applyScroll();
+      });
+    };
+
     window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
+    applyScroll();
 
     // IntersectionObserver for active section highlight
     const hashLinks = navLinks.filter((l) => l.href.startsWith('#'));
@@ -66,6 +77,7 @@ export default function Navbar() {
 
     return () => {
       window.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
     };
   }, []);

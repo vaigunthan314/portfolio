@@ -36,10 +36,15 @@ export default function SmoothScroll({ children }: { children?: React.ReactNode 
   const lenisRef = useRef<Lenis | null>(null);
 
   useEffect(() => {
+    // One instance only (Strict Mode / HMR safe): release any previous one.
+    if (globalLenis) {
+      globalLenis.destroy();
+      globalLenis = null;
+    }
+
     // Disable autoRaf so GSAP controls ticking exclusively without conflict
     const lenis = new Lenis({
-      duration: 1.2,
-      easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+      lerp: 0.1,
       touchMultiplier: 1.5,
       autoRaf: false,
     });

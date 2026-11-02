@@ -15,6 +15,8 @@ const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffec
 const BLOCKED_KEYS = new Set([' ', 'Space', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End']);
 /** Home-page scroll position, kept for Back from /malaysia. */
 const SCROLL_KEY = 'portfolio:scroll-y';
+/** Frames warmed right after the loader starts, before following the scroll. */
+const WARM_FRAMES = 40;
 
 let isScrollLocked = false;
 let releaseScrollLock: (() => void) | null = null;
@@ -101,10 +103,14 @@ export default function Hero() {
   const bitmapCacheRef = useRef<Map<number, ImageBitmap>>(new Map());
   const decodingSetRef = useRef<Set<number>>(new Set());
 
-  // Priority queue for background fetches (at most 4 concurrent, nearest to scroll position)
+  // Priority queue for background fetches (at most 3 concurrent, nearest to scroll position)
   const activeFetchesRef = useRef<number>(0);
   const fetchingSetRef = useRef<Set<number>>(new Set());
   const currentTargetFrameRef = useRef<number>(0);
+  // True once frame 1 is decoded and can be drawn (the loader only waits for this).
+  const firstFrameReadyRef = useRef(false);
+  // Decoding is scheduled off the scroll handler, one batch per frame.
+  const decodeRafRef = useRef<number | null>(null);
 
   // Frame metadata (edge colors for letterbox fill)
   const framesMetaRef = useRef<FrameEdgeColors[] | null>(null);
@@ -278,27 +284,36 @@ export default function Hero() {
     }
   }, []);
 
-  // Queue of at most 4 background connections nearest to current target scroll position
+  // At most 3 background fetches: nearest to the scroll position first, then
+  // the warm set (first 40 frames), then outward.
   const pumpFetchQueueRef = useRef<() => void>(() => {});
 
   const pumpFetchQueue = useCallback(() => {
     if (typeof window === 'undefined') return;
-    const maxConcurrent = 4;
+    const maxConcurrent = 3;
 
     while (activeFetchesRef.current < maxConcurrent) {
-      let bestIdx = -1;
-      let minDistance = Infinity;
       const target = currentTargetFrameRef.current;
+      const isFree = (i: number) => !blobCacheRef.current[i] && !fetchingSetRef.current.has(i);
 
-      for (let i = 0; i < TOTAL_FRAMES; i++) {
-        if (!blobCacheRef.current[i] && !fetchingSetRef.current.has(i)) {
+      const nearestIn = (from: number, to: number) => {
+        let best = -1;
+        let bestDist = Infinity;
+        for (let i = from; i <= to; i++) {
+          if (!isFree(i)) continue;
           const dist = Math.abs(i - target);
-          if (dist < minDistance) {
-            minDistance = dist;
-            bestIdx = i;
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = i;
           }
         }
-      }
+        return best;
+      };
+
+      // 1. near the scroll position, 2. the warm set, 3. anywhere.
+      let bestIdx = nearestIn(Math.max(0, target - 8), Math.min(TOTAL_FRAMES - 1, target + 8));
+      if (bestIdx === -1) bestIdx = nearestIn(0, Math.min(TOTAL_FRAMES - 1, WARM_FRAMES - 1));
+      if (bestIdx === -1) bestIdx = nearestIn(0, TOTAL_FRAMES - 1);
 
       if (bestIdx === -1) break;
 
@@ -310,25 +325,29 @@ export default function Hero() {
         fetchingSetRef.current.delete(idxToFetch);
         activeFetchesRef.current--;
 
-        const currentTarget = currentTargetFrameRef.current;
+        // Only frame 1 is decoded up front: the loader waits for it so the
+        // hero is never blank. Everything else is decoded by the window.
         if (
-          Math.abs(idxToFetch - currentTarget) <= 20 &&
-          blobCacheRef.current[idxToFetch] &&
-          !bitmapCacheRef.current.has(idxToFetch)
+          idxToFetch === 0 &&
+          !firstFrameReadyRef.current &&
+          blobCacheRef.current[0] &&
+          typeof createImageBitmap !== 'undefined'
         ) {
-          createImageBitmap(blobCacheRef.current[idxToFetch]!)
+          createImageBitmap(blobCacheRef.current[0]!)
             .then((bmp) => {
-              if (Math.abs(idxToFetch - currentTargetFrameRef.current) <= 20) {
-                bitmapCacheRef.current.set(idxToFetch, bmp);
-                if (lastDrawnFrameRef.current === idxToFetch) {
-                  drawFrame(idxToFetch, true);
-                }
-              } else {
+              if (bitmapCacheRef.current.has(0)) {
                 bmp.close();
+              } else {
+                bitmapCacheRef.current.set(0, bmp);
+                drawFrame(0, true);
               }
             })
-            .catch(() => {});
+            .catch(() => {})
+            .finally(() => {
+              firstFrameReadyRef.current = true;
+            });
         }
+
         pumpFetchQueueRef.current();
       });
     }
@@ -338,7 +357,7 @@ export default function Hero() {
     pumpFetchQueueRef.current = pumpFetchQueue;
   }, [pumpFetchQueue]);
 
-  // Sliding window ImageBitmap cache manager (+/-20 frames)
+  // Sliding window ImageBitmap cache manager (+/-12 desktop, +/-8 phones)
   const updateBitmapWindow = useCallback(
     (centerIdx: number) => {
       if (typeof window === 'undefined' || typeof createImageBitmap === 'undefined') return;
@@ -348,10 +367,11 @@ export default function Hero() {
       if (Math.abs(centerIdx - lastCenterIdxRef.current) < 2) return;
       lastCenterIdxRef.current = centerIdx;
 
-      const minIdx = Math.max(0, centerIdx - 20);
-      const maxIdx = Math.min(TOTAL_FRAMES - 1, centerIdx + 20);
+      const half = isMobileRef.current ? 8 : 12;
+      const minIdx = Math.max(0, centerIdx - half);
+      const maxIdx = Math.min(TOTAL_FRAMES - 1, centerIdx + half);
 
-      // 1. Evict bitmaps outside sliding window (+/-20 frames)
+      // 1. Evict bitmaps outside the window
       for (const [key, bmp] of bitmapCacheRef.current.entries()) {
         if (key < minIdx || key > maxIdx) {
           bmp.close();
@@ -359,34 +379,46 @@ export default function Hero() {
         }
       }
 
-      // 2. Decode missing frames within window nearest to centerIdx
+      // One batch per frame, decoded outside the scroll handler.
+      if (decodeRafRef.current !== null) return;
+
       const missingIndices: number[] = [];
       for (let i = minIdx; i <= maxIdx; i++) {
         if (!bitmapCacheRef.current.has(i) && !decodingSetRef.current.has(i) && blobCacheRef.current[i]) {
           missingIndices.push(i);
         }
       }
+      if (!missingIndices.length) return;
       missingIndices.sort((a, b) => Math.abs(a - centerIdx) - Math.abs(b - centerIdx));
+      const batch = missingIndices.slice(0, 6);
 
-      for (let j = 0; j < Math.min(missingIndices.length, 6); j++) {
-        const i = missingIndices[j];
-        decodingSetRef.current.add(i);
-        createImageBitmap(blobCacheRef.current[i]!)
-          .then((bmp) => {
-            decodingSetRef.current.delete(i);
-            if (i >= minIdx && i <= maxIdx) {
-              bitmapCacheRef.current.set(i, bmp);
-              if (lastDrawnFrameRef.current === i) {
-                drawFrame(i, true);
+      decodeRafRef.current = requestAnimationFrame(() => {
+        decodeRafRef.current = null;
+        const liveHalf = isMobileRef.current ? 8 : 12;
+        const liveCenter = currentTargetFrameRef.current;
+
+        for (const i of batch) {
+          if (decodingSetRef.current.has(i) || bitmapCacheRef.current.has(i)) continue;
+          const blob = blobCacheRef.current[i];
+          if (!blob) continue;
+          decodingSetRef.current.add(i);
+          createImageBitmap(blob)
+            .then((bmp) => {
+              decodingSetRef.current.delete(i);
+              if (Math.abs(i - liveCenter) <= liveHalf) {
+                bitmapCacheRef.current.set(i, bmp);
+                if (lastDrawnFrameRef.current === i) {
+                  drawFrame(i, true);
+                }
+              } else {
+                bmp.close();
               }
-            } else {
-              bmp.close();
-            }
-          })
-          .catch(() => {
-            decodingSetRef.current.delete(i);
-          });
-      }
+            })
+            .catch(() => {
+              decodingSetRef.current.delete(i);
+            });
+        }
+      });
     },
     [drawFrame, pumpFetchQueue]
   );
@@ -431,7 +463,7 @@ export default function Hero() {
     if (loaderRef.current) {
       gsap.to(loaderRef.current, {
         yPercent: -100,
-        duration: 0.85,
+        duration: 0.5,
         ease: 'power4.inOut',
         onComplete: finish,
       });
@@ -469,26 +501,35 @@ export default function Hero() {
       loaderTl.fromTo(
         letters,
         { opacity: 0, y: 15 },
-        { opacity: 1, y: 0, duration: 0.55, stagger: 0.45, ease: 'power3.out' },
+        { opacity: 1, y: 0, duration: 0.5, stagger: 0.35, ease: 'power3.out' },
         0
       );
       if (vslNameRef.current) {
         loaderTl.fromTo(
           vslNameRef.current,
           { opacity: 0 },
-          { opacity: 1, duration: 0.5, ease: 'power2.out' },
-          1.6
+          { opacity: 1, duration: 0.4, ease: 'power2.out' },
+          1.35
         );
       }
-      if (progressBarRef.current) {
-        // Linear fill over 2.2s, holding at 95% until the frames are ready.
-        loaderTl.fromTo(
-          progressBarRef.current,
-          { scaleX: 0 },
-          { scaleX: 0.95, duration: 2.2, ease: 'none' },
-          0
-        );
-      }
+      // One shared 0→1 progress value: the bar fills linearly over exactly 2s
+      // and is clamped at 95% until frame 1 is decoded and drawable.
+      const progress = { v: 0 };
+      loaderTl.to(
+        progress,
+        {
+          v: 1,
+          duration: 2,
+          ease: 'none',
+          onUpdate: () => {
+            const el = progressBarRef.current;
+            if (!el) return;
+            const shown = firstFrameReadyRef.current ? progress.v : Math.min(progress.v, 0.95);
+            el.style.transform = `scaleX(${shown})`;
+          },
+        },
+        0
+      );
     }
 
     // Preload first 3 frames via link rel="preload"
@@ -503,7 +544,6 @@ export default function Hero() {
     }
 
     const startTime = Date.now();
-    let loadedInitial20 = false;
     let finishTriggered = false;
 
     const triggerDismiss = () => {
@@ -524,20 +564,23 @@ export default function Hero() {
       }
       gsap.to(progressBarRef.current, {
         scaleX: 1,
-        duration: 0.2,
+        duration: 0.1,
         ease: 'none',
         onComplete: () => dismissLoader(),
       });
     };
 
-    // The loader always finishes on its own after 2–3 seconds. It never waits
-    // for a click, tap or key press.
+    // The loader always finishes on its own after 2 seconds, once frame 1 is
+    // drawable. It never waits for a click, tap or key press.
     const checkReady = () => {
       if (!runLoader || isCancelled || finishTriggered) return;
       const elapsed = Date.now() - startTime;
 
-      if ((elapsed >= 2200 && loadedInitial20) || elapsed >= 2800) {
-        // Hard cap: the bar completes at ~3s even if frames are still coming.
+      if (elapsed >= 2000 && firstFrameReadyRef.current) {
+        finishTriggered = true;
+        finishProgress();
+      } else if (elapsed >= 4000) {
+        // Hard cap: the bar completes even if frame 1 never arrived.
         finishTriggered = true;
         finishProgress();
       } else {
@@ -545,32 +588,9 @@ export default function Hero() {
       }
     };
 
-    // Preload initial 20 frames at high priority
-    const initialLoads: Promise<void>[] = [];
-    for (let i = 0; i < 20; i++) {
-      initialLoads.push(
-        fetchFrameBlob(i, true).then(async (blob) => {
-          if (blob && typeof createImageBitmap !== 'undefined') {
-            const bmp = await createImageBitmap(blob);
-            if (!isCancelled) {
-              bitmapCacheRef.current.set(i, bmp);
-              if (i === 0) {
-                drawFrame(0, true);
-              }
-            } else {
-              bmp.close();
-            }
-          }
-        })
-      );
-    }
-
-    Promise.all(initialLoads).finally(() => {
-      loadedInitial20 = true;
-      checkReady();
-      // Pump queue for remaining frames (at most 4 at a time)
-      pumpFetchQueue();
-    });
+    // Warm the first 40 frames through the 3-slot queue; the rest continue in
+    // the background after the loader.
+    pumpFetchQueue();
 
     checkReady();
 
@@ -721,6 +741,10 @@ export default function Hero() {
 
     return () => {
       ctx.revert();
+      if (decodeRafRef.current !== null) {
+        cancelAnimationFrame(decodeRafRef.current);
+        decodeRafRef.current = null;
+      }
     };
   }, [reducedMotion, updateBitmapWindow, drawFrame]);
 
