@@ -27,31 +27,28 @@ export default function CustomCursor() {
       setY(e.clientY);
     };
 
-    const onMouseEnterInteractive = () => cursor.classList.add('hovered');
-    const onMouseLeaveInteractive = () => cursor.classList.remove('hovered');
-
-    window.addEventListener('mousemove', onMouseMove, { passive: true });
-
-    const attachListeners = () => {
-      document.querySelectorAll('a, button, [data-hover]').forEach((el) => {
-        el.removeEventListener('mouseenter', onMouseEnterInteractive);
-        el.removeEventListener('mouseleave', onMouseLeaveInteractive);
-        el.addEventListener('mouseenter', onMouseEnterInteractive);
-        el.addEventListener('mouseleave', onMouseLeaveInteractive);
-      });
+    const onMouseOver = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('a, button, [data-hover]')) {
+        cursor.classList.add('hovered');
+      }
     };
 
-    attachListeners();
+    const onMouseOut = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('a, button, [data-hover]')) {
+        cursor.classList.remove('hovered');
+      }
+    };
 
-    const observer = new MutationObserver(() => {
-      attachListeners();
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+    window.addEventListener('mouseover', onMouseOver, { passive: true });
+    window.addEventListener('mouseout', onMouseOut, { passive: true });
 
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
-      observer.disconnect();
+      window.removeEventListener('mouseover', onMouseOver);
+      window.removeEventListener('mouseout', onMouseOut);
     };
   }, []);
 

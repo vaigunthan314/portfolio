@@ -42,6 +42,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(window.location.pathname==='/'){document.documentElement.classList.add('loading');}}catch(e){}`,
+          }}
+        />
+      </head>
       <body className="film-grain bg-[#0a0a0a] text-[#f4f3ef]">
         <SoundProvider>{children}</SoundProvider>
       </body>
