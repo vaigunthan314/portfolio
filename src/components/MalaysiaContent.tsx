@@ -382,14 +382,24 @@ export function MalaysiaContent({ variant }: { variant: 'page' | 'overlay' }) {
               RETURN TO FULL EXPERIENCE, PROJECTS AND VERIFIED CREDENTIALS
             </p>
             <div>
-              <Link
-                href="/#education"
-                scroll={false}
-                className="text-mono text-xs border border-[#d93025] text-[#d93025] hover:bg-[#d93025] hover:text-[#f4f3ef] px-6 py-2.5 transition-colors inline-block"
-                data-hover
-              >
-                ← BACK TO PORTFOLIO
-              </Link>
+              {variant === 'overlay' ? (
+                <button
+                  type="button"
+                  onClick={() => router.back()}
+                  className="text-mono text-xs border border-[#d93025] text-[#d93025] hover:bg-[#d93025] hover:text-[#f4f3ef] px-6 py-2.5 transition-colors inline-block"
+                  data-hover
+                >
+                  ← BACK TO PORTFOLIO
+                </button>
+              ) : (
+                <Link
+                  href="/"
+                  className="text-mono text-xs border border-[#d93025] text-[#d93025] hover:bg-[#d93025] hover:text-[#f4f3ef] px-6 py-2.5 transition-colors inline-block"
+                  data-hover
+                >
+                  ← BACK TO PORTFOLIO
+                </Link>
+              )}
             </div>
           </div>
         </section>
