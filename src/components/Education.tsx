@@ -6,6 +6,7 @@ import Link from 'next/link';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { education, achievements, certifications } from '@/data/content';
+import { saveHomeScrollPosition } from './SmoothScroll';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -137,6 +138,8 @@ export default function Education() {
                   </span>
                   <Link
                     href="/malaysia"
+                    scroll={false}
+                    onClick={() => saveHomeScrollPosition()}
                     className="text-mono text-xs border border-[#0a0a0a] bg-[#0a0a0a] text-[#f4f3ef] hover:bg-transparent hover:text-[#0a0a0a] px-3 py-1.5 transition-colors self-start inline-block"
                   >
                     VIEW MY MALAYSIA JOURNEY ↗

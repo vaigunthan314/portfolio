@@ -6,15 +6,20 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { TOTAL_FRAMES, FRAME_PATH, FRAME_MOBILE_PATH } from '@/data/content';
 import { useReducedMotion } from '@/hooks/useMediaQuery';
 import { useSound } from '@/context/SoundContext';
-import { stopLenis, startLenis, scrollLenisToTop, scrollLenisTo } from './SmoothScroll';
+import {
+  stopLenis,
+  startLenis,
+  scrollLenisToTop,
+  scrollLenisTo,
+  saveHomeScrollPosition,
+  getSavedHomeScrollPosition,
+} from './SmoothScroll';
 
 gsap.registerPlugin(ScrollTrigger);
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 const BLOCKED_KEYS = new Set([' ', 'Space', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End']);
-/** Home-page scroll position, kept for Back from /malaysia. */
-const SCROLL_KEY = 'portfolio:scroll-y';
 /** Frames warmed right after the loader starts, before following the scroll. */
 const WARM_FRAMES = 40;
 
@@ -109,8 +114,9 @@ export default function Hero() {
   const currentTargetFrameRef = useRef<number>(0);
   // True once frame 1 is decoded and can be drawn (the loader only waits for this).
   const firstFrameReadyRef = useRef(false);
-  // Decoding is scheduled off the scroll handler, one batch per frame.
-  const decodeRafRef = useRef<number | null>(null);
+  const scrollDirRef = useRef<1 | -1>(1);
+  const activeDecodesRef = useRef<number>(0);
+  const lastEdgeColorKeyRef = useRef<string>('');
 
   // Frame metadata (edge colors for letterbox fill)
   const framesMetaRef = useRef<FrameEdgeColors[] | null>(null);
@@ -239,23 +245,31 @@ export default function Hero() {
     if (!ctx) return;
 
     const clampedIdx = Math.max(0, Math.min(TOTAL_FRAMES - 1, frameIdx));
-    if (!force && clampedIdx === lastDrawnFrameRef.current) return;
 
-    // Find exact or nearest loaded bitmap
+    // Find exact or nearest loaded bitmap (previous one first)
     let bmp = bitmapCacheRef.current.get(clampedIdx);
+    let chosenIdx = clampedIdx;
+
     if (!bmp) {
-      let nearestDist = Infinity;
-      for (const [k, b] of bitmapCacheRef.current.entries()) {
-        const d = Math.abs(k - clampedIdx);
-        if (d < nearestDist) {
-          nearestDist = d;
-          bmp = b;
+      for (let offset = 1; offset < TOTAL_FRAMES; offset++) {
+        const prev = clampedIdx - offset;
+        if (prev >= 0 && bitmapCacheRef.current.has(prev)) {
+          bmp = bitmapCacheRef.current.get(prev);
+          chosenIdx = prev;
+          break;
+        }
+        const next = clampedIdx + offset;
+        if (next < TOTAL_FRAMES && bitmapCacheRef.current.has(next)) {
+          bmp = bitmapCacheRef.current.get(next);
+          chosenIdx = next;
+          break;
         }
       }
     }
 
     if (!bmp) return;
-    lastDrawnFrameRef.current = clampedIdx;
+    if (!force && chosenIdx === lastDrawnFrameRef.current) return;
+    lastDrawnFrameRef.current = chosenIdx;
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -263,29 +277,98 @@ export default function Hero() {
     // Draw frame pixels at native resolution
     ctx.drawImage(bmp, 0, 0, nativeWidthRef.current, nativeHeightRef.current);
 
-    // Update letterbox bars with sampled edge colors
-    const meta = framesMetaRef.current ? framesMetaRef.current[clampedIdx] : null;
-    if (meta) {
-      const topColor = `rgb(${meta.top[0]}, ${meta.top[1]}, ${meta.top[2]})`;
-      const bottomColor = `rgb(${meta.bottom[0]}, ${meta.bottom[1]}, ${meta.bottom[2]})`;
-      const leftColor = `rgb(${meta.left[0]}, ${meta.left[1]}, ${meta.left[2]})`;
-      const rightColor = `rgb(${meta.right[0]}, ${meta.right[1]}, ${meta.right[2]})`;
+    // Update letterbox bars only when sampled edge color key changes
+    const meta = framesMetaRef.current ? framesMetaRef.current[chosenIdx] : null;
+    const colorKey = meta
+      ? `${meta.top.join(',')}_${meta.bottom.join(',')}_${meta.left.join(',')}_${meta.right.join(',')}`
+      : chosenIdx >= 215 ? 'white' : 'dark';
 
-      if (topBarRef.current) topBarRef.current.style.backgroundColor = topColor;
-      if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = bottomColor;
-      if (leftBarRef.current) leftBarRef.current.style.backgroundColor = leftColor;
-      if (rightBarRef.current) rightBarRef.current.style.backgroundColor = rightColor;
-    } else {
-      const fallbackColor = clampedIdx >= 215 ? '#fcfcfc' : '#0a0a0a';
-      if (topBarRef.current) topBarRef.current.style.backgroundColor = fallbackColor;
-      if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = fallbackColor;
-      if (leftBarRef.current) leftBarRef.current.style.backgroundColor = fallbackColor;
-      if (rightBarRef.current) rightBarRef.current.style.backgroundColor = fallbackColor;
+    if (colorKey !== lastEdgeColorKeyRef.current) {
+      lastEdgeColorKeyRef.current = colorKey;
+      if (meta) {
+        const topColor = `rgb(${meta.top[0]}, ${meta.top[1]}, ${meta.top[2]})`;
+        const bottomColor = `rgb(${meta.bottom[0]}, ${meta.bottom[1]}, ${meta.bottom[2]})`;
+        const leftColor = `rgb(${meta.left[0]}, ${meta.left[1]}, ${meta.left[2]})`;
+        const rightColor = `rgb(${meta.right[0]}, ${meta.right[1]}, ${meta.right[2]})`;
+
+        if (topBarRef.current) topBarRef.current.style.backgroundColor = topColor;
+        if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = bottomColor;
+        if (leftBarRef.current) leftBarRef.current.style.backgroundColor = leftColor;
+        if (rightBarRef.current) rightBarRef.current.style.backgroundColor = rightColor;
+      } else {
+        const fallbackColor = chosenIdx >= 215 ? '#fcfcfc' : '#0a0a0a';
+        if (topBarRef.current) topBarRef.current.style.backgroundColor = fallbackColor;
+        if (bottomBarRef.current) bottomBarRef.current.style.backgroundColor = fallbackColor;
+        if (leftBarRef.current) leftBarRef.current.style.backgroundColor = fallbackColor;
+        if (rightBarRef.current) rightBarRef.current.style.backgroundColor = fallbackColor;
+      }
     }
   }, []);
 
-  // At most 3 background fetches: nearest to the scroll position first, then
-  // the warm set (first 40 frames), then outward.
+  // Decode queue: max 2 concurrent off-thread createImageBitmap calls within sliding window
+  const pumpDecodeQueueRef = useRef<() => void>(() => {});
+
+  const pumpDecodeQueue = useCallback(() => {
+    if (typeof window === 'undefined' || typeof createImageBitmap === 'undefined') return;
+    const maxConcurrent = 2;
+    const target = currentTargetFrameRef.current;
+    const isPhone = isMobileRef.current;
+    const dir = scrollDirRef.current;
+    const behind = isPhone ? 4 : 6;
+    const ahead = isPhone ? 8 : 24;
+    const minIdx = Math.max(0, dir === 1 ? target - behind : target - ahead);
+    const maxIdx = Math.min(TOTAL_FRAMES - 1, dir === 1 ? target + ahead : target + behind);
+
+    while (activeDecodesRef.current < maxConcurrent) {
+      let bestIdx = -1;
+      let minDistance = Infinity;
+
+      for (let i = minIdx; i <= maxIdx; i++) {
+        if (!bitmapCacheRef.current.has(i) && !decodingSetRef.current.has(i) && blobCacheRef.current[i]) {
+          const dist = Math.abs(i - target);
+          if (dist < minDistance) {
+            minDistance = dist;
+            bestIdx = i;
+          }
+        }
+      }
+
+      if (bestIdx === -1) break;
+
+      const idxToDecode = bestIdx;
+      decodingSetRef.current.add(idxToDecode);
+      activeDecodesRef.current++;
+
+      createImageBitmap(blobCacheRef.current[idxToDecode]!)
+        .then((bmp) => {
+          const curTarget = currentTargetFrameRef.current;
+          const curDir = scrollDirRef.current;
+          const curMin = Math.max(0, curDir === 1 ? curTarget - behind : curTarget - ahead);
+          const curMax = Math.min(TOTAL_FRAMES - 1, curDir === 1 ? curTarget + ahead : curTarget + behind);
+
+          if (idxToDecode >= curMin && idxToDecode <= curMax) {
+            bitmapCacheRef.current.set(idxToDecode, bmp);
+            if (lastDrawnFrameRef.current === idxToDecode) {
+              drawFrame(idxToDecode, true);
+            }
+          } else {
+            bmp.close();
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          decodingSetRef.current.delete(idxToDecode);
+          activeDecodesRef.current = Math.max(0, activeDecodesRef.current - 1);
+          pumpDecodeQueueRef.current();
+        });
+    }
+  }, [drawFrame]);
+
+  useEffect(() => {
+    pumpDecodeQueueRef.current = pumpDecodeQueue;
+  }, [pumpDecodeQueue]);
+
+  // At most 3 background fetches: ahead in scroll direction first, then behind, then warm set (first 40 frames).
   const pumpFetchQueueRef = useRef<() => void>(() => {});
 
   const pumpFetchQueue = useCallback(() => {
@@ -294,6 +377,7 @@ export default function Hero() {
 
     while (activeFetchesRef.current < maxConcurrent) {
       const target = currentTargetFrameRef.current;
+      const dir = scrollDirRef.current;
       const isFree = (i: number) => !blobCacheRef.current[i] && !fetchingSetRef.current.has(i);
 
       const nearestIn = (from: number, to: number) => {
@@ -310,8 +394,13 @@ export default function Hero() {
         return best;
       };
 
-      // 1. near the scroll position, 2. the warm set, 3. anywhere.
-      let bestIdx = nearestIn(Math.max(0, target - 8), Math.min(TOTAL_FRAMES - 1, target + 8));
+      const aheadFrom = dir === 1 ? target : Math.max(0, target - 24);
+      const aheadTo = dir === 1 ? Math.min(TOTAL_FRAMES - 1, target + 24) : target;
+      const behindFrom = dir === 1 ? Math.max(0, target - 6) : target;
+      const behindTo = dir === 1 ? target : Math.min(TOTAL_FRAMES - 1, target + 6);
+
+      let bestIdx = nearestIn(aheadFrom, aheadTo);
+      if (bestIdx === -1) bestIdx = nearestIn(behindFrom, behindTo);
       if (bestIdx === -1) bestIdx = nearestIn(0, Math.min(TOTAL_FRAMES - 1, WARM_FRAMES - 1));
       if (bestIdx === -1) bestIdx = nearestIn(0, TOTAL_FRAMES - 1);
 
@@ -325,8 +414,6 @@ export default function Hero() {
         fetchingSetRef.current.delete(idxToFetch);
         activeFetchesRef.current--;
 
-        // Only frame 1 is decoded up front: the loader waits for it so the
-        // hero is never blank. Everything else is decoded by the window.
         if (
           idxToFetch === 0 &&
           !firstFrameReadyRef.current &&
@@ -348,6 +435,7 @@ export default function Hero() {
             });
         }
 
+        pumpDecodeQueueRef.current();
         pumpFetchQueueRef.current();
       });
     }
@@ -357,7 +445,7 @@ export default function Hero() {
     pumpFetchQueueRef.current = pumpFetchQueue;
   }, [pumpFetchQueue]);
 
-  // Sliding window ImageBitmap cache manager (+/-12 desktop, +/-8 phones)
+  // Sliding window ImageBitmap cache manager (6 behind, 24 ahead on desktop; max +/-12 on phone)
   const updateBitmapWindow = useCallback(
     (centerIdx: number) => {
       if (typeof window === 'undefined' || typeof createImageBitmap === 'undefined') return;
@@ -367,11 +455,14 @@ export default function Hero() {
       if (Math.abs(centerIdx - lastCenterIdxRef.current) < 2) return;
       lastCenterIdxRef.current = centerIdx;
 
-      const half = isMobileRef.current ? 8 : 12;
-      const minIdx = Math.max(0, centerIdx - half);
-      const maxIdx = Math.min(TOTAL_FRAMES - 1, centerIdx + half);
+      const isPhone = isMobileRef.current;
+      const dir = scrollDirRef.current;
+      const behind = isPhone ? 4 : 6;
+      const ahead = isPhone ? 8 : 24;
+      const minIdx = Math.max(0, dir === 1 ? centerIdx - behind : centerIdx - ahead);
+      const maxIdx = Math.min(TOTAL_FRAMES - 1, dir === 1 ? centerIdx + ahead : centerIdx + behind);
 
-      // 1. Evict bitmaps outside the window
+      // 1. Evict bitmaps outside the directional window
       for (const [key, bmp] of bitmapCacheRef.current.entries()) {
         if (key < minIdx || key > maxIdx) {
           bmp.close();
@@ -379,48 +470,10 @@ export default function Hero() {
         }
       }
 
-      // One batch per frame, decoded outside the scroll handler.
-      if (decodeRafRef.current !== null) return;
-
-      const missingIndices: number[] = [];
-      for (let i = minIdx; i <= maxIdx; i++) {
-        if (!bitmapCacheRef.current.has(i) && !decodingSetRef.current.has(i) && blobCacheRef.current[i]) {
-          missingIndices.push(i);
-        }
-      }
-      if (!missingIndices.length) return;
-      missingIndices.sort((a, b) => Math.abs(a - centerIdx) - Math.abs(b - centerIdx));
-      const batch = missingIndices.slice(0, 6);
-
-      decodeRafRef.current = requestAnimationFrame(() => {
-        decodeRafRef.current = null;
-        const liveHalf = isMobileRef.current ? 8 : 12;
-        const liveCenter = currentTargetFrameRef.current;
-
-        for (const i of batch) {
-          if (decodingSetRef.current.has(i) || bitmapCacheRef.current.has(i)) continue;
-          const blob = blobCacheRef.current[i];
-          if (!blob) continue;
-          decodingSetRef.current.add(i);
-          createImageBitmap(blob)
-            .then((bmp) => {
-              decodingSetRef.current.delete(i);
-              if (Math.abs(i - liveCenter) <= liveHalf) {
-                bitmapCacheRef.current.set(i, bmp);
-                if (lastDrawnFrameRef.current === i) {
-                  drawFrame(i, true);
-                }
-              } else {
-                bmp.close();
-              }
-            })
-            .catch(() => {
-              decodingSetRef.current.delete(i);
-            });
-        }
-      });
+      // 2. Decode missing frames (at most 2 concurrently off main thread)
+      pumpDecodeQueue();
     },
-    [drawFrame, pumpFetchQueue]
+    [pumpFetchQueue, pumpDecodeQueue]
   );
 
   useIsomorphicLayoutEffect(() => {
@@ -601,55 +654,83 @@ export default function Hero() {
     };
   }, [fetchFrameBlob, drawFrame, startAudio, dismissLoader, getFramePath, pumpFetchQueue]);
 
-  // Remember the home-page position so Back from /malaysia lands where you were.
+  // Save home-page scroll position continually so Back from /malaysia lands where you were.
   useEffect(() => {
-    let lastY = window.scrollY;
     const onScroll = () => {
-      lastY = window.scrollY;
+      saveHomeScrollPosition();
     };
     window.addEventListener('scroll', onScroll, { passive: true });
 
     return () => {
       window.removeEventListener('scroll', onScroll);
-      try {
-        sessionStorage.setItem(SCROLL_KEY, String(lastY));
-      } catch {
-        // Private mode without storage: Back just starts at the top.
-      }
+      saveHomeScrollPosition();
     };
   }, []);
 
   // Client-side return (e.g. from /malaysia): no loader, no scroll lock.
-  // Honour #hash if present, otherwise restore the saved position.
+  // Wait for fonts & pin spacers, verify document height, then restore exact scroll.
   useEffect(() => {
     if (loaderShouldRun.current) return; // full load: the loader starts at the top
 
     let cancelled = false;
-    const timer = window.setTimeout(() => {
+    let rafId: number | null = null;
+
+    const restorePosition = async () => {
+      if (document.fonts) {
+        try {
+          await document.fonts.ready;
+        } catch {}
+      }
       if (cancelled) return;
+
       ScrollTrigger.refresh();
 
-      requestAnimationFrame(() => {
+      let targetScroll: number | HTMLElement | null = null;
+
+      const hash = window.location.hash.slice(1);
+      const hashEl = hash ? document.getElementById(hash) : null;
+      if (hashEl) {
+        targetScroll = hashEl;
+      } else {
+        const saved = getSavedHomeScrollPosition();
+        if (saved > 0) {
+          targetScroll = saved;
+        }
+      }
+
+      if (targetScroll === null) return;
+
+      const startTime = performance.now();
+      const checkAndScroll = () => {
         if (cancelled) return;
-        const hash = window.location.hash.slice(1);
-        const target = hash ? document.getElementById(hash) : null;
-        if (target) {
-          scrollLenisTo(target);
-          return;
+        const currentTargetY =
+          typeof targetScroll === 'number'
+            ? targetScroll
+            : (targetScroll as HTMLElement).getBoundingClientRect().top + window.scrollY;
+        const docHeight = document.documentElement.scrollHeight;
+
+        if (docHeight > currentTargetY + 50 || performance.now() - startTime > 2000) {
+          scrollLenisTo(targetScroll, { immediate: true, force: true });
+          ScrollTrigger.update();
+        } else {
+          rafId = requestAnimationFrame(checkAndScroll);
         }
-        let y = 0;
-        try {
-          y = Number(sessionStorage.getItem(SCROLL_KEY)) || 0;
-        } catch {
-          y = 0;
-        }
-        if (y > 0) scrollLenisTo(y);
-      });
-    }, 100);
+      };
+
+      rafId = requestAnimationFrame(checkAndScroll);
+    };
+
+    restorePosition();
+
+    const onPopState = () => {
+      restorePosition();
+    };
+    window.addEventListener('popstate', onPopState);
 
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      window.removeEventListener('popstate', onPopState);
     };
   }, []);
 
@@ -682,15 +763,17 @@ export default function Hero() {
           end: 'bottom bottom',
           pin: container,
           pinSpacing: true,
-          scrub: 0.1,
+          scrub: true,
           invalidateOnRefresh: true,
           onUpdate: (self) => {
             if (reducedMotion) return;
+            scrollDirRef.current = self.direction >= 0 ? 1 : -1;
             const progress = self.progress;
             const frameIndex = Math.min(
               TOTAL_FRAMES - 1,
               Math.max(0, mapProgressToFrame(progress))
             );
+            currentTargetFrameRef.current = frameIndex;
 
             updateBitmapWindow(frameIndex);
             drawFrame(frameIndex);
@@ -741,10 +824,6 @@ export default function Hero() {
 
     return () => {
       ctx.revert();
-      if (decodeRafRef.current !== null) {
-        cancelAnimationFrame(decodeRafRef.current);
-        decodeRafRef.current = null;
-      }
     };
   }, [reducedMotion, updateBitmapWindow, drawFrame]);
 

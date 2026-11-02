@@ -92,11 +92,20 @@ export default function MalaysiaPage() {
       <nav className="fixed top-0 left-0 right-0 z-50 bg-[#0a0a0a] border-b border-[#8a8a85] px-6 md:px-12 h-14 flex items-center justify-between">
         <Link
           href="/#education"
+          scroll={false}
           className="text-mono text-[#f4f3ef] hover:text-[#d93025] transition-colors text-[11px] sm:text-[12px]"
           data-hover
         >
           ← BACK TO PORTFOLIO
         </Link>
+        <div className="hidden md:flex items-center gap-6">
+          <Link href="/#about" scroll={false} className="text-mono text-xs text-[#8a8a85] hover:text-[#f4f3ef] transition-colors" data-hover>ABOUT</Link>
+          <Link href="/#skills" scroll={false} className="text-mono text-xs text-[#8a8a85] hover:text-[#f4f3ef] transition-colors" data-hover>SKILLS</Link>
+          <Link href="/#experience" scroll={false} className="text-mono text-xs text-[#8a8a85] hover:text-[#f4f3ef] transition-colors" data-hover>EXPERIENCE</Link>
+          <Link href="/#projects" scroll={false} className="text-mono text-xs text-[#8a8a85] hover:text-[#f4f3ef] transition-colors" data-hover>PROJECTS</Link>
+          <Link href="/#education" scroll={false} className="text-mono text-xs text-[#d93025] border-b border-[#d93025] pb-0.5" data-hover>EDUCATION</Link>
+          <Link href="/#contact" scroll={false} className="text-mono text-xs text-[#8a8a85] hover:text-[#f4f3ef] transition-colors" data-hover>CONTACT</Link>
+        </div>
         <span className="text-mono text-[#8a8a85] text-[11px] sm:text-[12px] hidden sm:block">
           VAIGUNTHAN SL — MALAYSIA JOURNEY
         </span>
@@ -357,7 +366,8 @@ export default function MalaysiaPage() {
             </p>
             <div>
               <Link
-                href="/"
+                href="/#education"
+                scroll={false}
                 className="text-mono text-xs border border-[#d93025] text-[#d93025] hover:bg-[#d93025] hover:text-[#f4f3ef] px-6 py-2.5 transition-colors inline-block"
                 data-hover
               >

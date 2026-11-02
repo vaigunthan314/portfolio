@@ -9,6 +9,24 @@ gsap.registerPlugin(ScrollTrigger);
 
 // One shared instance: the intro loader stops/starts this one, never a second.
 let globalLenis: Lenis | null = null;
+let savedHomeScrollY = 0;
+
+export function saveHomeScrollPosition(): void {
+  if (typeof window === 'undefined') return;
+  savedHomeScrollY = window.scrollY;
+  try {
+    sessionStorage.setItem('portfolio:scroll-y', String(window.scrollY));
+  } catch {}
+}
+
+export function getSavedHomeScrollPosition(): number {
+  if (savedHomeScrollY > 0) return savedHomeScrollY;
+  try {
+    return Number(sessionStorage.getItem('portfolio:scroll-y')) || 0;
+  } catch {
+    return 0;
+  }
+}
 
 export function stopLenis(): void {
   globalLenis?.stop();
@@ -22,9 +40,12 @@ export function scrollLenisToTop(): void {
   globalLenis?.scrollTo(0, { immediate: true });
 }
 
-export function scrollLenisTo(target: number | HTMLElement): void {
+export function scrollLenisTo(
+  target: number | HTMLElement,
+  options?: { immediate?: boolean; force?: boolean }
+): void {
   if (globalLenis) {
-    globalLenis.scrollTo(target, { immediate: true });
+    globalLenis.scrollTo(target, { immediate: true, force: true, ...options });
   } else if (typeof target === 'number') {
     window.scrollTo(0, target);
   } else {
